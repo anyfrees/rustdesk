@@ -437,7 +437,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           "Status",
           "${translate("new-version-of-{${bind.mainGetAppNameSync()}}-tip")} (${bind.mainGetNewVersion()}).",
           "Click to download", () async {
-        final Uri url = Uri.parse('https://rustdesk.com/download');
+        final Uri url = Uri.parse('https://pan.0vk.com/%E8%BD%AF%E4%BB%B6%E5%BA%93/Tools/%E8%BF%9C%E7%A8%8B/Rustdesk');
         await launchUrl(url);
       }, closeButton: true);
     }
