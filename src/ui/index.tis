@@ -679,10 +679,10 @@ class UpdateMe: Reactor.Component {
     }
 
     event click $(#install-me) {
-        handler.open_url("https://rustdesk.com/download");
+        handler.open_url("https://pan.0vk.com/%E8%BD%AF%E4%BB%B6%E5%BA%93/Tools/%E8%BF%9C%E7%A8%8B/Rustdesk");
         return;
         if (!is_win) {
-            handler.open_url("https://rustdesk.com");
+            handler.open_url("https://www.0vk.com");
             return;
         }
         var url = software_update_url + '.' + handler.get_software_ext();
