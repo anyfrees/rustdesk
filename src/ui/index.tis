@@ -692,10 +692,10 @@ class UpdateMe: Reactor.Component {
     }
 
     event click $(#install-me) {
-        handler.open_url("https://rustdesk.com/download");
+        handler.open_url("https://rd-download.0vk.com");
         return;
         if (!is_win) {
-            handler.open_url("https://rustdesk.com");
+            handler.open_url("https://0vk.com");
             return;
         }
         var url = software_update_url + '.' + handler.get_software_ext();
