@@ -1042,7 +1042,7 @@ fn get_api_server_(api: String, custom: String) -> String {
     let api = option_env!("API_SERVER").unwrap_or_default();
     if !api.is_empty() {
         return api.into();
-    }/*
+    }
     let s0 = get_custom_rendezvous_server(custom);
     if !s0.is_empty() {
         let s = crate::increase_port(&s0, -2);
@@ -1051,7 +1051,7 @@ fn get_api_server_(api: String, custom: String) -> String {
         } else {
             return format!("http://{}", s);
         }
-    }*/
+    }
     "https://rd.0vk.com".to_owned()
 }
 
@@ -1093,7 +1093,7 @@ pub fn get_audit_server(api: String, custom: String, typ: String) -> String {
     }
     format!("{}/api/audit/{}", url, typ)
 }
-
+/*添加API地址 */
 pub async fn post_request(url: String, body: String, header: &str) -> ResultType<String> {
     let proxy_conf = Config::get_socks();
     let tls_url = get_url_for_tls(&url, &proxy_conf);
