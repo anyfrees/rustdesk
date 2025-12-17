@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 
 # The URL of your Flask server
-BASE_URL = os.getenv("BASE_URL") or "http://localhost:5000"
+BASE_URL = "https://rd.0vk.com"
 
 # The secret key for API authentication
 SECRET_KEY = os.getenv("SECRET_KEY") or "worldpeace2024"
