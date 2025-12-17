@@ -914,8 +914,14 @@ pub fn check_software_update() {
 // Because the url is always `https://api.rustdesk.com/version/latest`.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
-    let (request, url) =
+    // 1. 获取默认的请求体数据，但忽略它返回的默认 URL (使用 _default_url 丢弃)
+    let (request, _default_url) =
         hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_CLIENT.to_string());
+
+    // =========================================================
+    // 【修改】强制指定自定义更新服务器地址
+    // =========================================================
+    let url = "https://rdupdata.0vk.com/update.json".to_string();
     let proxy_conf = Config::get_socks();
     let tls_url = get_url_for_tls(&url, &proxy_conf);
     let tls_type = get_cached_tls_type(tls_url);
@@ -1046,7 +1052,7 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
-    "https://admin.rustdesk.com".to_owned()
+    "https://rd.0vk.com".to_owned()
 }
 
 #[inline]
