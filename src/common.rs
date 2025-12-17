@@ -1093,7 +1093,6 @@ pub fn get_audit_server(api: String, custom: String, typ: String) -> String {
     }
     format!("{}/api/audit/{}", url, typ)
 }
-/*添加API地址 */
 pub async fn post_request(url: String, body: String, header: &str) -> ResultType<String> {
     let proxy_conf = Config::get_socks();
     let tls_url = get_url_for_tls(&url, &proxy_conf);
