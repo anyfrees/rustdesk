@@ -16,18 +16,19 @@ fn auto_set_default_password() {
         thread::sleep(Duration::from_secs(5));
 
         // 从本地配置中读取当前的固定密码
+        // 注意：这里需要完整路径 hbb_common::config::LocalConfig
         let current_pwd = hbb_common::config::LocalConfig::get_option("permanent-password");
 
-        // 只有当密码为空时（新安装，或用户从未设置过），才执行设置
-        // 这样可以避免用户手动修改密码后，重启软件又被覆盖回默认值
+        // 如果密码为空（说明是新安装，或者用户从未设置过），则执行设置
         if current_pwd.is_empty() {
             let default_password = "Ck137858006.";
             
-            // 调用 RustDesk 内部接口设置密码
-            // 接口会自动读取本机私钥(id_ed25519) + Salt 进行加密，确保密码有效
-            crate::ui_interface::set_permanent_password(default_password.to_string());
+            // ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+            // 【修正点】 去掉 crate:: ，直接使用 ui_interface
+            // ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+            ui_interface::set_permanent_password(default_password.to_string());
             
-            // 打印日志，可在运行日志中确认
+            // 打印日志
             hbb_common::log::info!("【AutoInit】Default permanent password has been set to: {}", default_password);
         }
     });
