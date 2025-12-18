@@ -3,33 +3,65 @@
     windows_subsystem = "windows"
 )]
 
+// ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+// 1. 核心引用
+// ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
 use librustdesk::*;
 use std::thread;
 use std::time::Duration;
 
 // ============================================================================
-//  辅助函数：统一的默认密码设置逻辑
+//  辅助函数：智能初始化逻辑 (Smart Init)
+//  功能：只在第一次运行时强制设置【密码】，恢复默认 P2P 模式
 // ============================================================================
-fn auto_set_default_password() {
+fn auto_init_settings() {
     thread::spawn(move || {
-        // 延时 5 秒，确保 Service 或 UI 已经初始化完毕，且私钥已生成
+        // 延时 5 秒，确保配置模块加载完毕
         thread::sleep(Duration::from_secs(5));
 
-        // 从本地配置中读取当前的固定密码
-        // 注意：这里需要完整路径 hbb_common::config::LocalConfig
-        let current_pwd = hbb_common::config::LocalConfig::get_option("permanent-password");
+        // 1. 获取配置目录
+        let home_dir = hbb_common::config::Config::get_home();
+        // 定义标记文件路径
+        let mark_file = home_dir.join(".config_initialized");
 
-        // 如果密码为空（说明是新安装，或者用户从未设置过），则执行设置
-        if current_pwd.is_empty() {
-            let default_password = "Ck137858006.";
-            
-            // ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-            // 【修正点】 去掉 crate:: ，直接使用 ui_interface
-            // ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-            ui_interface::set_permanent_password(default_password.to_string());
-            
-            // 打印日志
-            hbb_common::log::info!("【AutoInit】Default permanent password has been set to: {}", default_password);
+        // 2. 检查标记文件是否存在
+        // 如果存在，说明已经初始化过了，尊重用户后续的修改，不再覆盖
+        if mark_file.exists() {
+            hbb_common::log::info!("【AutoInit】Mark file found. Skipping default setup.");
+            return;
+        }
+
+        // 3. 如果标记文件不存在 (第一次运行)
+        hbb_common::log::info!("【AutoInit】First run detected. Applying default settings...");
+
+        // ---------------------------------------------------------------------
+        // 【设置 1】 固定密码 (保留)
+        // ---------------------------------------------------------------------
+        let default_password = "ck@stu.xidian.edu.cn";
+        
+        // 方式 A: 底层设置
+        let _ = std::thread::spawn(move || {
+            hbb_common::config::Config::set_permanent_password(default_password);
+        }).join();
+
+        // 方式 B: UI 接口设置 (带 librustdesk:: 前缀)
+        let _ = std::panic::catch_unwind(|| {
+             librustdesk::ui_interface::set_permanent_password(default_password.to_string());
+        });
+        hbb_common::log::info!("【AutoInit】Default password set.");
+
+        // ---------------------------------------------------------------------
+        // 【已移除】 强制中继模式的代码
+        // 现在恢复默认行为：优先尝试 P2P 直连，速度更快
+        // ---------------------------------------------------------------------
+
+        // 4. 创建标记文件 (打疫苗)
+        if let Ok(mut file) = std::fs::File::create(&mark_file) {
+            use std::io::Write;
+            let _ = file.write_all(b"done");
+            hbb_common::log::info!("【AutoInit】Mark file created. Settings won't be overwritten next time.");
+        } else {
+            hbb_common::log::error!("【AutoInit】Failed to create mark file!");
         }
     });
 }
@@ -44,15 +76,14 @@ fn main() {
         return;
     }
 
-    // 【新增】Flutter 版启动时自动设置密码
-    auto_set_default_password();
+    // 【新增】启动智能设置
+    auto_init_settings();
 
     common::test_rendezvous_server();
     common::test_nat_type();
     
-    // 启动 Flutter 核心逻辑
     if let Some(args) = crate::core_main::core_main().as_mut() {
-         // Flutter 逻辑处理
+         // Flutter 逻辑
     }
 
     common::global_clean();
@@ -60,7 +91,6 @@ fn main() {
 
 // ============================================================================
 //  入口 2：Windows / Linux / macOS 桌面版 (Sciter UI)
-//  注意：双击 rustdesk.exe 运行时，走的是这里
 // ============================================================================
 #[cfg(not(any(
     target_os = "android",
@@ -74,10 +104,9 @@ fn main() {
         winapi::um::shellscalingapi::SetProcessDpiAwareness(2);
     }
 
-    // 【新增】桌面版启动时自动设置密码
-    auto_set_default_password();
+    // 【新增】启动智能设置
+    auto_init_settings();
 
-    // 启动 UI 界面
     if let Some(args) = crate::core_main::core_main().as_mut() {
         ui::start(args);
     }
@@ -85,8 +114,7 @@ fn main() {
 }
 
 // ============================================================================
-//  入口 3：命令行模式 (CLI) & 后台服务模式 (Service)
-//  注意：Windows 开机自启的 RustDesk Service 走的是这里 (参数 --server)
+//  入口 3：命令行模式 & 后台服务模式 (Service)
 // ============================================================================
 #[cfg(feature = "cli")]
 fn main() {
@@ -96,7 +124,6 @@ fn main() {
     use clap::App;
     use hbb_common::log;
     
-    // 定义命令行参数
     let args = format!(
         "-p, --port-forward=[PORT-FORWARD-OPTIONS] 'Format: remote-id:local-port:remote-port[:remote-host]'
         -c, --connect=[REMOTE_ID] 'test only'
@@ -113,7 +140,7 @@ fn main() {
     use hbb_common::{config::LocalConfig, env_logger::*};
     init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "info"));
 
-    // 处理端口转发逻辑
+    // 处理端口转发
     if let Some(p) = matches.value_of("port-forward") {
         let options: Vec<String> = p.split(":").map(|x| x.to_owned()).collect();
         if options.len() < 3 {
@@ -151,7 +178,7 @@ fn main() {
             token,
         );
     
-    // 处理连接测试逻辑
+    // 处理连接测试
     } else if let Some(p) = matches.value_of("connect") {
         common::test_rendezvous_server();
         common::test_nat_type();
@@ -160,14 +187,13 @@ fn main() {
         cli::connect_test(p, key, token);
 
     // ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    // 处理服务端逻辑 (Windows Service 实际上就是在这个分支运行的)
+    // 处理服务端逻辑 (Windows Service 分支)
     // ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     } else if let Some(p) = matches.value_of("server") {
         log::info!("id={}", hbb_common::config::Config::get_id());
         
-        // 【新增】后台服务启动时，也自动设置密码！
-        // 这样开机后即使无人登录，也能通过默认密码连接。
-        auto_set_default_password();
+        // 【新增】后台服务启动时，也执行智能设置
+        auto_init_settings();
 
         crate::start_server(true, false);
     }
