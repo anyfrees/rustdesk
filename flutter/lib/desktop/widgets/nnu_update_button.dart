@@ -6,9 +6,13 @@ import 'nnu_update_service.dart';
 
 class NnuUpdateButton extends StatefulWidget {
   final bool installed;
+  final String Function() installedPackageName;
   final bool Function() hasActiveSession;
   const NnuUpdateButton(
-      {super.key, required this.installed, required this.hasActiveSession});
+      {super.key,
+      required this.installed,
+      required this.installedPackageName,
+      required this.hasActiveSession});
 
   @override
   State<NnuUpdateButton> createState() => _NnuUpdateButtonState();
@@ -65,7 +69,19 @@ class _NnuUpdateButtonState extends State<NnuUpdateButton> {
     var downloading = false;
     var progress = 0.0;
     var error = '';
-    final artifact = release.artifacts[widget.installed ? 'msi' : 'portable']!;
+    final packageName = widget.installed ? widget.installedPackageName() : '';
+    final kind = !widget.installed
+        ? 'portable'
+        : packageName.endsWith('.msi')
+            ? 'msi'
+            : packageName.endsWith('.exe')
+                ? 'install'
+                : '';
+    final artifact = release.artifacts[kind];
+    if (artifact == null) {
+      _message('无法确定匹配的更新包，请联系 admin@nnu.cn。');
+      return;
+    }
     await showDialog<void>(
         context: context,
         barrierDismissible: false,
@@ -152,9 +168,12 @@ class _NnuUpdateButtonState extends State<NnuUpdateButton> {
                                 return;
                               }
                               try {
-                                if (widget.installed) {
+                                if (widget.installed && kind == 'msi') {
                                   await Process.start(
                                       'msiexec.exe', ['/i', downloaded!.path],
+                                      mode: ProcessStartMode.detached);
+                                } else if (widget.installed) {
+                                  await Process.start(downloaded!.path, [],
                                       mode: ProcessStartMode.detached);
                                 } else {
                                   await Process.start('explorer.exe',

@@ -337,6 +337,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           showNotice: _showNnuNotice,
           updateAction: !isWindows ? null : NnuUpdateButton(
             installed: bind.mainIsInstalled(),
+            installedPackageName: () => bind.mainGetCommonSync(key: 'download-file-1.5.0'),
             hasActiveSession: () => stateGlobal.videoConnCount.value > 0 ||
                 rustDeskWinManager.getActiveWindows().any((id) => id != kMainWindowId),
           ),
