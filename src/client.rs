@@ -477,6 +477,9 @@ impl Client {
             }
         };
 
+        #[cfg(windows)]
+        let token = crate::nnu::rendezvous_token(&rendezvous_server, key, token);
+
         // Same relay gate as the v6 socket below: under any forced relay the v6 punch cannot
         // be used, so probing v6 reachability is wasted work on every such connection.
         if crate::get_ipv6_punch_enabled() && !interface.is_force_relay() {

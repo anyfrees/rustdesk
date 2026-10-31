@@ -76,7 +76,7 @@ fn portable_first_start_preserves_user_choices_and_installed_devices() {
     assert_eq!(defaults.get("relay-server").unwrap(), "rd.nnu.cn:22222");
     assert_eq!(defaults.get("api-server").unwrap(), "https://rd.nnu.cn");
     assert_eq!(defaults.get("allow-auto-update").unwrap(), "N");
-    assert_eq!(defaults.get("allow-websocket").unwrap(), "Y");
+    assert_eq!(defaults.get("allow-websocket").unwrap(), "N");
     drop(defaults);
 
     nnu::initialize_portable_password();
@@ -108,4 +108,29 @@ fn portable_first_start_preserves_user_choices_and_installed_devices() {
     nnu::initialize_portable_password();
     assert!(!Config::has_permanent_password());
     assert!(config::options().lock().unwrap().is_empty());
+}
+
+#[test]
+fn api_tokens_are_withheld_only_from_the_configured_legacy_oss_server() {
+    let token = "api-bearer-token";
+    assert_eq!(
+        nnu::rendezvous_token("rd.nnu.cn:21116", "137858006", token),
+        ""
+    );
+    assert_eq!(
+        nnu::rendezvous_token("rd.0vk.com:21116", "137858006", token),
+        ""
+    );
+    assert_eq!(
+        nnu::rendezvous_token("rd.nnu.cn:21116", "new-public-key", token),
+        token
+    );
+    assert_eq!(
+        nnu::rendezvous_token("other.example:21116", "137858006", token),
+        token
+    );
+    assert_eq!(
+        nnu::rendezvous_token("rd.nnu.cn.evil.test:21116", "137858006", token),
+        token
+    );
 }

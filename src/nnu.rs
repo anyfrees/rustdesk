@@ -7,15 +7,27 @@ pub fn load_defaults() {
             ("relay-server", "rd.nnu.cn:22222"),
             ("api-server", "https://rd.nnu.cn"),
             ("key", "137858006"),
-            ("allow-websocket", "Y"),
+            ("allow-websocket", "N"),
             ("allow-auto-update", "N"),
         ]
         .map(|(key, value)| (key.to_owned(), value.to_owned())),
     );
     config::DEFAULT_LOCAL_SETTINGS.write().unwrap().extend(
-        [("enable-check-update", "N")]
-            .map(|(key, value)| (key.to_owned(), value.to_owned())),
+        [("enable-check-update", "N")].map(|(key, value)| (key.to_owned(), value.to_owned())),
     );
+}
+
+pub fn rendezvous_token<'a>(server: &str, key: &str, token: &'a str) -> &'a str {
+    let host = server.strip_suffix(":21116").unwrap_or(server);
+    if key == "137858006"
+        && (host.eq_ignore_ascii_case("rd.nnu.cn") || host.eq_ignore_ascii_case("rd.0vk.com"))
+    {
+        // This OSS server does not authenticate API bearer tokens or provide a signing key.
+        // Keep API credentials on HTTPS instead of sending them to its rendezvous port.
+        ""
+    } else {
+        token
+    }
 }
 
 #[cfg(windows)]
