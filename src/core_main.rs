@@ -35,6 +35,8 @@ pub fn core_main() -> Option<Vec<String>> {
     }
     crate::load_custom_client();
     #[cfg(windows)]
+    crate::nnu::load_defaults();
+    #[cfg(windows)]
     if !crate::platform::windows::bootstrap() {
         // return None to terminate the process
         return None;
@@ -167,6 +169,10 @@ pub fn core_main() -> Option<Vec<String>> {
         }
     }
     hbb_common::init_log(false, &log_name);
+    #[cfg(windows)]
+    if args.is_empty() && !click_setup {
+        crate::nnu::initialize_portable_password();
+    }
 
     // linux uni (url) go here.
     #[cfg(all(target_os = "linux", feature = "flutter"))]

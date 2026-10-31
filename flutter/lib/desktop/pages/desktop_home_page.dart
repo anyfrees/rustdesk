@@ -90,6 +90,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         child: loadLogo(),
       ),
       buildTip(context),
+      if (!isOutgoingOnly)
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Text(
+            'NNU IT 远程支持\n请将下方 ID 发给 IT。便携版首次运行会启用预设密码，可在设置中修改或清除。仅向信任的 IT 提供 ID。',
+          ),
+        ),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),
       FutureBuilder<Widget>(
