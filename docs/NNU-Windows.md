@@ -13,6 +13,8 @@
 
 ID：`rd.nnu.cn:21116`；中继：`rd.nnu.cn:22222`；API：`https://rd.nnu.cn`。
 连接 key：`137858006`。WebSocket 端口保留 21118 / 21119。
+为兼容当前服务端的数字 key，默认启用 WebSocket：通过现有 HTTPS 443 反代访问 `wss://rd.nnu.cn/ws/id` 与 `/ws/relay`。原生端口配置仍保留；服务器无需改动。
+已有配置若明确关闭了 WebSocket，请在网络设置中开启；数字 key 下不建议切回原生 TCP 握手。WSS 模式的远程数据经自建中继转发。
 支持网站：https://nnu.cn 。账号登录、地址簿、分组使用现有 lejianwen/rustdesk-api。
 同事作为被控端提供 ID 时无需登录 API 账号。主控端可通过客户端登录自己的账号。
 这些是默认配置，设置中仍可修改。保留 RustDesk 原作者版权和 AGPL 许可证。

@@ -7,6 +7,7 @@ pub fn load_defaults() {
             ("relay-server", "rd.nnu.cn:22222"),
             ("api-server", "https://rd.nnu.cn"),
             ("key", "137858006"),
+            ("allow-websocket", "Y"),
             ("allow-auto-update", "N"),
         ]
         .map(|(key, value)| (key.to_owned(), value.to_owned())),

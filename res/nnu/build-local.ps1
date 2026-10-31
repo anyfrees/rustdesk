@@ -1,6 +1,7 @@
 param(
     [string]$ToolRoot = "$env:USERPROFILE\.codex\tools\nnu-build",
-    [string]$OutputDirectory = "$PSScriptRoot\..\..\NNU-Output"
+    [string]$OutputDirectory = "$PSScriptRoot\..\..\NNU-Output",
+    [switch]$SkipPrepare
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -22,6 +23,7 @@ function Run-Step([string]$Executable, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "$Executable failed with exit code $LASTEXITCODE" }
 }
 
+if (-not $SkipPrepare) {
 Expand-Archive -LiteralPath res\nnu\bridge-1.5.0.zip -DestinationPath $repo -Force
 Push-Location flutter
 try {
@@ -46,6 +48,7 @@ try {
 } finally { Pop-Location }
 
 Run-Step "$ToolRoot\vcpkg\vcpkg.exe" @('install', '--triplet', 'x64-windows-static', '--host-triplet', 'x64-windows-static', "--x-install-root=$ToolRoot\vcpkg\installed")
+}
 Run-Step 'rustc' @('--edition=2021', '--test', 'res/nnu/test_bootstrap.rs', '-o', "$ToolRoot\nnu-bootstrap-tests.exe")
 Run-Step "$ToolRoot\nnu-bootstrap-tests.exe" @()
 Run-Step 'py' @('build.py', '--portable', '--flutter', '--skip-portable-pack', '--hwcodec', '--vram')
