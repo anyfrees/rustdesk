@@ -45,6 +45,7 @@ void main() {
           showNotice: true,
           connectionUnavailable: true,
           onContactSupport: () {},
+          updateAction: TextButton(onPressed: () {}, child: const Text('检查更新')),
           onDismissNotice: () {},
           onOpenSupport: () {},
         ),

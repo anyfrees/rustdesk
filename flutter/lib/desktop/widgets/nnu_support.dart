@@ -35,6 +35,7 @@ class NnuSupportFooter extends StatelessWidget {
   final VoidCallback onOpenSupport;
   final bool connectionUnavailable;
   final VoidCallback? onContactSupport;
+  final Widget? updateAction;
 
   const NnuSupportFooter({
     super.key,
@@ -44,6 +45,7 @@ class NnuSupportFooter extends StatelessWidget {
     required this.onOpenSupport,
     this.connectionUnavailable = false,
     this.onContactSupport,
+    this.updateAction,
   });
 
   @override
@@ -106,12 +108,18 @@ class NnuSupportFooter extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (status != null) status!,
-                  Align(alignment: Alignment.centerRight, child: link),
+                  Align(
+                      alignment: Alignment.centerRight,
+                      child: Wrap(children: [
+                        if (updateAction != null) updateAction!,
+                        link
+                      ])),
                 ],
               );
             }
             return Row(children: [
               Expanded(child: status ?? const SizedBox.shrink()),
+              if (updateAction != null) updateAction!,
               link,
             ]);
           }),

@@ -15,6 +15,14 @@ pub fn load_defaults() {
     config::DEFAULT_LOCAL_SETTINGS.write().unwrap().extend(
         [("enable-check-update", "N")].map(|(key, value)| (key.to_owned(), value.to_owned())),
     );
+    config::OVERWRITE_SETTINGS
+        .write()
+        .unwrap()
+        .insert("allow-auto-update".to_owned(), "N".to_owned());
+    config::OVERWRITE_LOCAL_SETTINGS
+        .write()
+        .unwrap()
+        .insert("enable-check-update".to_owned(), "N".to_owned());
 }
 
 pub fn rendezvous_token<'a>(server: &str, key: &str, token: &'a str) -> &'a str {

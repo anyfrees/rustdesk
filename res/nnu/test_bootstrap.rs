@@ -23,6 +23,8 @@ pub mod config {
     }
     pub static DEFAULT_SETTINGS: Settings = Settings(OnceLock::new());
     pub static DEFAULT_LOCAL_SETTINGS: Settings = Settings(OnceLock::new());
+    pub static OVERWRITE_SETTINGS: Settings = Settings(OnceLock::new());
+    pub static OVERWRITE_LOCAL_SETTINGS: Settings = Settings(OnceLock::new());
     pub fn options() -> &'static Mutex<HashMap<String, String>> {
         static OPTIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
         OPTIONS.get_or_init(Default::default)
@@ -77,6 +79,22 @@ fn portable_first_start_preserves_user_choices_and_installed_devices() {
     assert_eq!(defaults.get("api-server").unwrap(), "https://rd.nnu.cn");
     assert_eq!(defaults.get("allow-auto-update").unwrap(), "N");
     assert_eq!(defaults.get("allow-websocket").unwrap(), "N");
+    assert_eq!(
+        config::OVERWRITE_SETTINGS
+            .read()
+            .unwrap()
+            .get("allow-auto-update")
+            .unwrap(),
+        "N"
+    );
+    assert_eq!(
+        config::OVERWRITE_LOCAL_SETTINGS
+            .read()
+            .unwrap()
+            .get("enable-check-update")
+            .unwrap(),
+        "N"
+    );
     drop(defaults);
 
     nnu::initialize_portable_password();
