@@ -75,6 +75,7 @@ fn portable_first_start_preserves_user_choices_and_installed_devices() {
     let defaults = config::DEFAULT_SETTINGS.read().unwrap();
     assert_eq!(defaults.get("relay-server").unwrap(), "rd.nnu.cn:22222");
     assert_eq!(defaults.get("api-server").unwrap(), "https://rd.nnu.cn");
+    assert_eq!(defaults.get("allow-auto-update").unwrap(), "N");
     drop(defaults);
 
     nnu::initialize_portable_password();

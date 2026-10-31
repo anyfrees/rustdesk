@@ -7,11 +7,12 @@ pub fn load_defaults() {
             ("relay-server", "rd.nnu.cn:22222"),
             ("api-server", "https://rd.nnu.cn"),
             ("key", "137858006"),
+            ("allow-auto-update", "N"),
         ]
         .map(|(key, value)| (key.to_owned(), value.to_owned())),
     );
     config::DEFAULT_LOCAL_SETTINGS.write().unwrap().extend(
-        [("enable-check-update", "N"), ("allow-auto-update", "N")]
+        [("enable-check-update", "N")]
             .map(|(key, value)| (key.to_owned(), value.to_owned())),
     );
 }

@@ -36,3 +36,4 @@ ID：`rd.nnu.cn:21116`；中继：`rd.nnu.cn:22222`；API：`https://rd.nnu.cn`�
 可复现源码：anyfrees/rustdesk 的 `nnu/windows-1.5.0` 分支，以及 anyfrees/hbb_common 同名分支。
 当前采用本机编译，不再消耗 GitHub Actions 额度。保留的工作流仅供今后自行启用。
 本机构建使用 Rust 1.75.0、Flutter 3.24.5、LLVM 15.0.6 和 Visual Studio 2022 Build Tools。
+Flutter 构建目录应使用英文路径；本机准备好的目录位于 `%USERPROFILE%\.codex\tools\nnu-build\source`。
