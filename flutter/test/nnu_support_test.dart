@@ -43,6 +43,8 @@ void main() {
         bottomNavigationBar: NnuSupportFooter(
           status: const SizedBox(height: 42, child: Text('就绪')),
           showNotice: true,
+          connectionUnavailable: true,
+          onContactSupport: () {},
           onDismissNotice: () {},
           onOpenSupport: () {},
         ),
@@ -52,5 +54,33 @@ void main() {
     expect(find.text('知道了'), findsOneWidget);
     expect(find.text('nnu.cn 提供服务支持'), findsOneWidget);
     expect(find.byTooltip(nnuSupportTitle), findsOneWidget);
+    expect(find.text(nnuSupportEmail), findsOneWidget);
+  });
+
+  testWidgets('email contact appears only while unavailable and is actionable',
+      (tester) async {
+    var unavailable = true;
+    var contacted = false;
+    late StateSetter update;
+    await tester.pumpWidget(MaterialApp(
+      home: StatefulBuilder(builder: (context, setState) {
+        update = setState;
+        return Scaffold(
+          bottomNavigationBar: NnuSupportFooter(
+            showNotice: false,
+            connectionUnavailable: unavailable,
+            onDismissNotice: () {},
+            onOpenSupport: () {},
+            onContactSupport: () => contacted = true,
+          ),
+        );
+      }),
+    ));
+    await tester.tap(find.text(nnuSupportEmail));
+    expect(contacted, isTrue);
+    update(() => unavailable = false);
+    await tester.pumpAndSettle();
+    expect(find.text(nnuSupportEmail), findsNothing);
+    expect(find.text('nnu.cn 提供服务支持'), findsOneWidget);
   });
 }

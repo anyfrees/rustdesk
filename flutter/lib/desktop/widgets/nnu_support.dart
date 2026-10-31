@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 const nnuSupportTitle = 'IT技术支持专用版本，请勿共享给他人使用。';
 const nnuNoticeSeenOption = 'nnu-first-use-notice-seen';
+const nnuSupportEmail = 'admin@nnu.cn';
 
 class NnuSupportTitle extends StatelessWidget {
   const NnuSupportTitle({super.key});
@@ -32,6 +33,8 @@ class NnuSupportFooter extends StatelessWidget {
   final bool showNotice;
   final VoidCallback onDismissNotice;
   final VoidCallback onOpenSupport;
+  final bool connectionUnavailable;
+  final VoidCallback? onContactSupport;
 
   const NnuSupportFooter({
     super.key,
@@ -39,6 +42,8 @@ class NnuSupportFooter extends StatelessWidget {
     required this.showNotice,
     required this.onDismissNotice,
     required this.onOpenSupport,
+    this.connectionUnavailable = false,
+    this.onContactSupport,
   });
 
   @override
@@ -111,6 +116,21 @@ class NnuSupportFooter extends StatelessWidget {
             ]);
           }),
         ),
+        if (connectionUnavailable)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 8, 6),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text('连接异常？联系技术支持：', style: theme.textTheme.bodySmall),
+                TextButton(
+                  onPressed: onContactSupport,
+                  child: const Text(nnuSupportEmail,
+                      style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }

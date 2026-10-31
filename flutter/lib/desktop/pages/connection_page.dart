@@ -126,10 +126,10 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
                         : Color.fromARGB(255, 224, 79, 95)),
               ),
             ).marginSymmetric(horizontal: em),
-            Container(
+            Flexible(child: Container(
               width: isIncomingOnly ? 226 : null,
               child: _buildConnStatusMsg(),
-            ),
+            )),
             // stop
             if (!isIncomingOnly) startServiceWidget(),
             // ready && public
@@ -330,13 +330,18 @@ class _ConnectionPageState extends State<ConnectionPage>
             Expanded(child: PeerTabPage()),
           ],
         ).paddingOnly(left: 12.0)),
-        NnuSupportFooter(
+        Obx(() => NnuSupportFooter(
           status: isOutgoingOnly ? null : const OnlineStatusWidget(),
           showNotice: _showNnuNotice,
+          connectionUnavailable: !Get.find<RxBool>(tag: 'stop-service').value &&
+              stateGlobal.svcStatus.value == SvcStatus.notReady,
+          onContactSupport: () => launchUrlString(
+              'mailto:$nnuSupportEmail?subject=RustDesk%20NNU%20%E8%BF%9E%E6%8E%A5%E6%94%AF%E6%8C%81',
+              mode: LaunchMode.externalApplication),
           onDismissNotice: () => setState(() => _showNnuNotice = false),
           onOpenSupport: () => launchUrlString('https://nnu.cn',
               mode: LaunchMode.externalApplication),
-        ),
+        )),
       ],
     );
   }
