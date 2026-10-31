@@ -34,4 +34,5 @@ ID：`rd.nnu.cn:21116`；中继：`rd.nnu.cn:22222`；API：`https://rd.nnu.cn`�
 安装版需要管理员权限；便携版控制 UAC / 管理员窗口时可能需要用户主动提权。
 
 可复现源码：anyfrees/rustdesk 的 `nnu/windows-1.5.0` 分支，以及 anyfrees/hbb_common 同名分支。
-在 GitHub Actions 运行该分支的 `playground.yml`，从产物下载四种包。
+当前采用本机编译，不再消耗 GitHub Actions 额度。保留的工作流仅供今后自行启用。
+本机构建使用 Rust 1.75.0、Flutter 3.24.5、LLVM 15.0.6 和 Visual Studio 2022 Build Tools。

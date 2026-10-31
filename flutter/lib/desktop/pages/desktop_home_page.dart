@@ -94,7 +94,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           child: Text(
-            'NNU IT 远程支持\n请将下方 ID 发给 IT。便携版首次运行会启用预设密码，可在设置中修改或清除。仅向信任的 IT 提供 ID。',
+            'NNU IT 远程支持\n将下方 ID 发给信任的 IT。便携版可使用预设密码，在设置中可修改或清除。',
           ),
         ),
       if (!isOutgoingOnly) buildIDBoard(context),

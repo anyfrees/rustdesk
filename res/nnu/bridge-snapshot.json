@@ -1,0 +1,16 @@
+{
+  "upstream_repository": "rustdesk/rustdesk",
+  "upstream_run": 41149005952,
+  "artifact_id": 13021968585,
+  "source_commit": "33a154a5d7502419381dc601aff1e4b0c660054d",
+  "target_release": "1.5.0",
+  "adaptation": "prepare_bridge.py; unchanged product FFI source",
+  "sha256": {
+    "src/bridge_generated.rs": "1e9c535b047f427e2dbb1b91abe8ca58b34a7f0cfcbd052d3af866e6a8270aea",
+    "src/bridge_generated.io.rs": "3abecad8c4e3cbfa21df9e29e077fecb832e8d95d41c7eff944be646d0166728",
+    "flutter/lib/generated_bridge.dart": "bb51f0ae737d3653049f155a4074197bdccf28abfba784c8045990d647867e55",
+    "flutter/lib/generated_bridge.freezed.dart": "c7e9daac122dffffc62b7cbbe6ad4f5013fbc332de3878aa7acb321b13ab9cad",
+    "flutter/macos/Runner/bridge_generated.h": "cb8db098c274d8215f0be3ec15f3d06b3d535d8f0b537f002dc94a1456a11685",
+    "flutter/ios/Runner/bridge_generated.h": "cb8db098c274d8215f0be3ec15f3d06b3d535d8f0b537f002dc94a1456a11685"
+  }
+}
