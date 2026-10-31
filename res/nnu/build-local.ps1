@@ -1,7 +1,8 @@
 param(
     [string]$ToolRoot = "$env:USERPROFILE\.codex\tools\nnu-build",
     [string]$OutputDirectory = "$PSScriptRoot\..\..\NNU-Output",
-    [switch]$SkipPrepare
+    [switch]$SkipPrepare,
+    [switch]$UiOnly
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -51,7 +52,9 @@ Run-Step "$ToolRoot\vcpkg\vcpkg.exe" @('install', '--triplet', 'x64-windows-stat
 }
 Run-Step 'rustc' @('--edition=2021', '--test', 'res/nnu/test_bootstrap.rs', '-o', "$ToolRoot\nnu-bootstrap-tests.exe")
 Run-Step "$ToolRoot\nnu-bootstrap-tests.exe" @()
-Run-Step 'py' @('build.py', '--portable', '--flutter', '--skip-portable-pack', '--hwcodec', '--vram')
+$buildArguments = @('build.py', '--portable', '--flutter', '--skip-portable-pack', '--hwcodec', '--vram')
+if ($UiOnly) { $buildArguments += '--skip-cargo' }
+Run-Step 'py' $buildArguments
 
 $distribution = Join-Path $repo 'flutter\build\windows\x64\runner\Release'
 Copy-Item "$ToolRoot\RustDeskTempTopMostWindow\WindowInjection\x64\Release\WindowInjection.dll" $distribution -Force

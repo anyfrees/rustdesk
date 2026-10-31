@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/widgets/connection_page_title.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_support.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -198,6 +199,8 @@ class ConnectionPage extends StatefulWidget {
 /// State for the connection page.
 class _ConnectionPageState extends State<ConnectionPage>
     with SingleTickerProviderStateMixin, WindowListener {
+  bool _showNnuNotice = false;
+
   /// Controller for the id input bar.
   final _idController = IDTextEditingController();
 
@@ -220,6 +223,14 @@ class _ConnectionPageState extends State<ConnectionPage>
   void initState() {
     super.initState();
     _allPeersLoader.init(setState);
+    _showNnuNotice = bind.mainGetLocalOption(key: nnuNoticeSeenOption) != 'Y';
+    if (_showNnuNotice) {
+      unawaited(bind
+          .mainSetLocalOption(key: nnuNoticeSeenOption, value: 'Y')
+          .catchError((Object error) {
+        debugPrint('Failed to save NNU first-use notice: $error');
+      }));
+    }
     _idFocusNode.addListener(onFocusChanged);
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -319,8 +330,13 @@ class _ConnectionPageState extends State<ConnectionPage>
             Expanded(child: PeerTabPage()),
           ],
         ).paddingOnly(left: 12.0)),
-        if (!isOutgoingOnly) const Divider(height: 1),
-        if (!isOutgoingOnly) OnlineStatusWidget()
+        NnuSupportFooter(
+          status: isOutgoingOnly ? null : const OnlineStatusWidget(),
+          showNotice: _showNnuNotice,
+          onDismissNotice: () => setState(() => _showNnuNotice = false),
+          onOpenSupport: () => launchUrlString('https://nnu.cn',
+              mode: LaunchMode.externalApplication),
+        ),
       ],
     );
   }

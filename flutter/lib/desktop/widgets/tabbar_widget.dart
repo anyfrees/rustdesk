@@ -236,6 +236,7 @@ typedef LabelGetter = Rx<String> Function(String key);
 int _lastClickTime = 0;
 
 class DesktopTab extends StatefulWidget {
+  final Widget? emptyTabContent;
   final bool showLogo;
   final bool showTitle;
   final bool showMinimize;
@@ -262,6 +263,7 @@ class DesktopTab extends StatefulWidget {
   DesktopTab({
     Key? key,
     required this.controller,
+    this.emptyTabContent,
     this.showLogo = true,
     this.showTitle = false,
     this.showMinimize = true,
@@ -666,7 +668,10 @@ class _DesktopTabState extends State<DesktopTab>
                                 });
                               }
                             },
-                            child: _ListView(
+                            child: widget.emptyTabContent != null &&
+                                    isHideSingleItem()
+                                ? widget.emptyTabContent!
+                                : _ListView(
                               controller: controller,
                               invisibleTabKeys: invisibleTabKeys,
                               tabBuilder: tabBuilder,
