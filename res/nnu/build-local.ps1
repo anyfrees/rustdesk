@@ -22,6 +22,29 @@ function Run-Step([string]$Executable, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "$Executable failed with exit code $LASTEXITCODE" }
 }
 
+Expand-Archive -LiteralPath res\nnu\bridge-1.5.0.zip -DestinationPath $repo -Force
+Push-Location flutter
+try {
+    $pubOutput = & flutter pub get 2>&1
+    $pubResult = $LASTEXITCODE
+    $pubOutput | Write-Host
+    if ($pubResult -ne 0 -and ($pubOutput -join "`n") -notmatch 'symlink support') {
+        throw 'Flutter dependency resolution failed.'
+    }
+    $plugins = Get-Content .flutter-plugins-dependencies -Raw | ConvertFrom-Json
+    foreach ($platform in @('windows', 'linux')) {
+        $linkRoot = Join-Path (Get-Location) "$platform\flutter\ephemeral\.plugin_symlinks"
+        New-Item -ItemType Directory -Force -Path $linkRoot | Out-Null
+        foreach ($plugin in $plugins.plugins.$platform) {
+            $linkPath = Join-Path $linkRoot $plugin.name
+            if (-not (Test-Path -LiteralPath $linkPath)) {
+                New-Item -ItemType Junction -Path $linkPath -Target $plugin.path | Out-Null
+            }
+        }
+    }
+    Run-Step 'flutter' @('pub', 'get', '--offline')
+} finally { Pop-Location }
+
 Run-Step "$ToolRoot\vcpkg\vcpkg.exe" @('install', '--triplet', 'x64-windows-static', '--host-triplet', 'x64-windows-static', "--x-install-root=$ToolRoot\vcpkg\installed")
 Run-Step 'rustc' @('--edition=2021', '--test', 'res/nnu/test_bootstrap.rs', '-o', "$ToolRoot\nnu-bootstrap-tests.exe")
 Run-Step "$ToolRoot\nnu-bootstrap-tests.exe" @()
@@ -29,6 +52,7 @@ Run-Step 'py' @('build.py', '--portable', '--flutter', '--skip-portable-pack', '
 
 $distribution = Join-Path $repo 'flutter\build\windows\x64\runner\Release'
 Copy-Item "$ToolRoot\RustDeskTempTopMostWindow\WindowInjection\x64\Release\WindowInjection.dll" $distribution -Force
+Run-Step 'py' @('res/nnu/package-drivers.py', '--tools', $ToolRoot, '--dist', $distribution)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 Push-Location libs\portable
