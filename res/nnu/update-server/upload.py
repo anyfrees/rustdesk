@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socket
+import struct
 import uuid
 
 import paramiko
@@ -16,7 +18,10 @@ parser.add_argument('--source', type=Path, required=True)
 parser.add_argument('--host', required=True)
 parser.add_argument('--user', required=True)
 parser.add_argument('--identity')
+parser.add_argument('--interface-index', type=int, help='Windows outgoing interface for this SSH socket only')
 args = parser.parse_args()
+if args.interface_index is not None and (os.name != 'nt' or not 0 < args.interface_index <= 0xffffff):
+    parser.error('--interface-index requires Windows and a valid physical interface index')
 envelope = json.loads((args.source / 'stable.json').read_text(encoding='utf-8'))
 payload = base64.b64decode(envelope['payload'])
 public = Path(__file__).resolve().parent.parent / 'update-public-key.txt'
@@ -30,7 +35,13 @@ password = None if args.identity else os.environ.get('NNU_SSH_PASSWORD') or getp
 client = paramiko.SSHClient()
 client.load_system_host_keys()
 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect(args.host, username=args.user, password=password, key_filename=args.identity, timeout=20)
+connection = None
+if args.interface_index is not None:
+    connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    connection.setsockopt(socket.IPPROTO_IP, 31, struct.pack('!I', args.interface_index))
+    connection.settimeout(20)
+    connection.connect((args.host, 22))
+client.connect(args.host, username=args.user, password=password, key_filename=args.identity, timeout=20, sock=connection)
 stage = '/tmp/nnu-release-' + uuid.uuid4().hex
 
 def run(command):
@@ -46,6 +57,7 @@ try:
     with client.open_sftp() as sftp:
         for file in sorted(release.iterdir()):
             if file.is_file():
+                print(f'Uploading {file.name} ({file.stat().st_size} bytes)', flush=True)
                 sftp.put(str(file), stage + '/release/' + file.name)
         sftp.put(str(args.source / 'stable.json'), stage + '/stable.json')
     checks = []

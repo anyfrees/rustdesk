@@ -40,6 +40,9 @@ py res/nnu/update-server/publish.py --source <构建产物目录> --output <发�
 py res/nnu/update-server/upload.py --source <发布目录> --host <服务器IP> --user ubuntu
 ```
 
+Windows 开启 TUN 时若 SSH 上传绕路变慢，可增加 `--interface-index <物理网卡序号>`，只设置该 SSH socket 的出站网卡，不改全局代理或路由。用 `Get-NetRoute -DestinationPrefix 0.0.0.0/0` 查询物理网卡的 InterfaceIndex，重启后请重新核对。
+本机重复构建前应使用干净的 MSI 模板；`preprocess.py` 会修改 res/msi 下的生成清单，确认这些文件仅含上次构建产物后再还原，避免重复文件条目。
+
 客户端启动后检查一次，也可点底部“检查更新”。只接受内置公钥验证通过的 Ed25519 清单和同一 HTTPS 路径内的安装包。下载后验证大小及 SHA-256，再提供打开安装包/文件位置按钮。不会自动重启客户端或静默安装。安装操作会提醒中断远程会话，已检测到被控会话时阻止启动安装。
 
 UI2/UI3 等旧版尚无更新入口，需要手动安装一次带更新功能的 UI4；此后可通过自建服务持续分发。
