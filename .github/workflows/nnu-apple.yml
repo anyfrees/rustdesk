@@ -128,6 +128,10 @@ jobs:
             if [[ "$attempt" == 3 ]]; then exit 1; fi
             sleep 10
           done
+      - name: Verify native Apple platform
+        env:
+          APPLE_PLATFORM: ${{ matrix.platform }}
+        run: python3 res/nnu/apple-ci.py check-native
       - name: Save completed native dependencies
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -140,6 +144,8 @@ jobs:
         if: matrix.platform == 'macos'
         shell: bash
         run: |
+          # Rebundle the validated native archives instead of old cached copies.
+          cargo clean --release -p scrap -p hwcodec -p magnum-opus
           python3 build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.extra_args }}
           python3 res/nnu/apple-ci.py package-macos
       - name: Build iOS unsigned IPA

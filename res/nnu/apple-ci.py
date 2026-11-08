@@ -132,6 +132,23 @@ def package(platform):
     print(json.dumps(proof, ensure_ascii=False, indent=2))
 
 
+def check_native():
+    triplet = os.environ['VCPKG_DEFAULT_TRIPLET']
+    folder = Path(os.environ['VCPKG_ROOT']) / 'installed' / triplet / 'lib'
+    expected = '2' if os.environ['APPLE_PLATFORM'] == 'ios' else '1'
+    for name in ['libvpx.a', 'libaom.a', 'libyuv.a', 'libopus.a']:
+        result = subprocess.run(['xcrun', 'otool', '-l', str(folder / name)],
+                                capture_output=True, text=True, check=True)
+        platforms = set(re.findall(r'^\s*platform\s+(\d+)\s*$', result.stdout, re.M))
+        if 'LC_VERSION_MIN_MACOSX' in result.stdout:
+            platforms.add('1')
+        if 'LC_VERSION_MIN_IPHONEOS' in result.stdout:
+            platforms.add('2')
+        if platforms != {expected}:
+            raise ValueError(f'{triplet}/{name} has unexpected Apple platforms: {platforms}')
+        print(f'Verified {triplet}/{name}: Apple platform {expected}')
+
+
 if __name__ == '__main__':
     command = sys.argv[1]
     if command == 'matrix':
@@ -154,6 +171,8 @@ if __name__ == '__main__':
         configure()
     elif command == 'downloads':
         configure_downloads(sys.argv[2])
+    elif command == 'check-native':
+        check_native()
     elif command == 'package-macos':
         package('macos')
     elif command == 'package-ios':
