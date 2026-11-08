@@ -14,6 +14,7 @@ mod server;
 #[cfg(not(any(target_os = "ios")))]
 pub use self::server::*;
 mod client;
+mod nnu_voice_call;
 mod lan;
 #[cfg(not(any(target_os = "ios")))]
 mod rendezvous_mediator;
@@ -29,6 +30,10 @@ pub mod ipc;
     feature = "flutter"
 )))]
 pub mod ui;
+pub(crate) mod update_metadata;
+pub(crate) mod update_hash;
+#[cfg(target_os = "macos")]
+mod manual_update;
 mod version;
 pub use version::*;
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
@@ -39,13 +44,27 @@ pub mod flutter;
 pub mod flutter_ffi;
 use common::*;
 mod auth_2fa;
+mod trusted_devices;
 #[cfg(not(target_os = "ios"))]
 mod clipboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod core_main;
 mod custom_server;
-#[cfg(windows)]
+mod nnu_connection_window;
 mod nnu;
+mod nnu_official_support;
+mod nnu_network;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod nnu_remote_id;
+#[cfg(windows)]
+mod nnu_update;
+#[cfg(any(target_os="windows",target_os="linux",target_os="android"))]
+mod nnu_id;
+#[cfg(feature="flutter")]
+mod nnu_history;
+#[cfg(feature="flutter")]
+mod nnu_account_peers;
+mod nnu_history_files;
 mod lang;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod port_forward;

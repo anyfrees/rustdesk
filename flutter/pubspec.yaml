@@ -16,7 +16,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # Read more about iOS versioning at
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # 1.1.9-1 works for android, but for ios it becomes 1.1.91, need to set it to 1.1.9-a.1 for iOS, will get 1.1.9.1, but iOS store not allow 4 numbers
-version: 1.5.0+68
+version: 1.5.1+69
 
 environment:
   sdk: '^3.1.0'
@@ -57,6 +57,7 @@ dependencies:
     git:
       url: https://github.com/rustdesk-org/window_manager
       ref: cf4aef0512092fad9344a27ffe1c47ad83269dfc
+  screen_retriever: 0.1.9
   desktop_multi_window:
     git:
       url: https://github.com/rustdesk-org/rustdesk_desktop_multi_window
@@ -159,8 +160,13 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/
+    - assets/fonts/OFL.txt
 
   fonts:
+    - family: DouyinSans
+      fonts:
+        - asset: assets/fonts/DouyinSansBold.ttf
+          weight: 700
     - family: GestureIcons
       fonts:
         - asset: assets/gestures.ttf

@@ -68,6 +68,7 @@ use hbb_common::{
         time::{interval, Duration, Instant},
     },
     webrtc::WebRTCStream,
+    websocket::{check_ws, is_ws_endpoint},
     AddrMangle, ResultType, Stream,
 };
 use base::{
@@ -91,6 +92,8 @@ use crate::clipboard::{check_clipboard, ClipboardSide};
 use crate::ui_session_interface::SessionPermissionConfig;
 
 pub use super::lang::*;
+
+mod login_method;
 
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
@@ -266,7 +269,13 @@ async fn race_transports_prefer_webrtc<'a, T: 'a>(
                             }
                         }
                         match others_err.take() {
-                            Some(oe) => bail!("WebRTC failed: {}; fallback failed: {}", e, oe),
+                            // Report one error, as `select_ok` does: the UI matches and translates
+                            // the text whole (e.g. the offline auto-retry), and both legs often
+                            // carry the same rendezvous refusal anyway.
+                            Some(oe) => {
+                                log::warn!("fallback leg also failed: {}", oe);
+                                return Err(e);
+                            }
                             None if others_fut.is_none() => bail!("WebRTC failed: {}", e),
                             None => webrtc_err = Some(e),
                         }
@@ -307,7 +316,10 @@ async fn race_transports_prefer_webrtc<'a, T: 'a>(
                         // it before failing the connection.
                         Some(we) => match held.take() {
                             Some(conn) => return Ok(conn),
-                            None => bail!("WebRTC failed: {}; fallback failed: {}", we, e),
+                            None => {
+                                log::warn!("WebRTC leg also failed: {}", we);
+                                return Err(e);
+                            }
                         },
                         None if webrtc_fut.is_none() => match held.take() {
                             Some(conn) => return Ok(conn),
@@ -428,7 +440,7 @@ impl Client {
         if hbb_common::is_ip_str(peer) {
             return Ok((
                 (
-                    connect_tcp_local(check_port(peer, RELAY_PORT + 1), None, CONNECT_TIMEOUT)
+                    connect_tcp_local(check_port(peer, RENDEZVOUS_PORT + 2), None, CONNECT_TIMEOUT)
                         .await?,
                     true,
                     None,
@@ -601,6 +613,9 @@ impl Client {
     /// Relay-only ICE can then gather nothing. WebSocket does not: it tunnels only the signaling
     /// and relay legs, so the offer keeps full ICE and direct is exactly what it is there for.
     fn should_create_webrtc_offerer(interface: &impl Interface) -> bool {
+        if interface.get_lch().read().unwrap().nnu_native_fallback {
+            return false;
+        }
         if !crate::get_webrtc_enabled() {
             return false;
         }
@@ -814,7 +829,7 @@ impl Client {
         // into_inner() once the stream is adopted into a connection attempt.
         let mut webrtc_offerer = webrtc_offerer.map(OffererGuard::new);
         let mut start = Instant::now();
-        let mut socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await;
+        let mut socket = crate::nnu_network::connect(&rendezvous_server, CONNECT_TIMEOUT).await;
         debug_assert!(!servers.contains(&rendezvous_server));
         let rtt = start.elapsed();
         log::debug!("TCP connection establishment time used: {:?}", rtt);
@@ -834,6 +849,9 @@ impl Client {
         }
         log::info!("rendezvous server: {}", rendezvous_server);
         let mut socket = socket?;
+        if crate::nnu_network::tls_fallback(&socket) {
+            if let Some(url) = crate::nnu_network::fallback_url(&rendezvous_server) { rendezvous_server = url; }
+        }
         let mut my_addr = socket.local_addr();
         let mut signed_id_pk = Vec::new();
         let mut relay_server = "".to_owned();
@@ -843,7 +861,7 @@ impl Client {
         let mut is_local = false;
         let mut feedback = 0;
         use hbb_common::protobuf::Enum;
-        let nat_type = if interface.is_force_relay() {
+        let nat_type = if interface.is_force_relay() || matches!(&socket, Stream::WebSocket(_)) {
             NatType::SYMMETRIC
         } else {
             NatType::from_i32(my_nat_type).unwrap_or(NatType::UNKNOWN_NAT)
@@ -872,7 +890,7 @@ impl Client {
                         err
                     );
                     webrtc_offerer = None;
-                    socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await?;
+                    socket = crate::nnu_network::connect(&rendezvous_server, CONNECT_TIMEOUT).await?;
                     my_addr = socket.local_addr();
                 }
             }
@@ -920,7 +938,7 @@ impl Client {
             .and_then(|g| g.stream())
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
-        let allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let allow_tcp_punch = tcp_punch_allowed() && !matches!(&socket, Stream::WebSocket(_)) && request_allows_tcp_punch(&webrtc_sdp_offer);
         // Every direct transport this round carries, not one of them: a round can carry several
         // at once (a NAT port and an offer and a v6 address), and since the TCP punch became a
         // switch it can carry none — a single name had to misreport both. `relay` is not a punch,
@@ -951,7 +969,7 @@ impl Client {
             conn_type: conn_type.into(),
             version: crate::VERSION.to_owned(),
             udp_port: udp_nat_port as _,
-            force_relay: interface.is_force_relay(),
+            force_relay: interface.is_force_relay() || matches!(&socket, Stream::WebSocket(_)),
             socket_addr_v6: ipv6.1.unwrap_or_default(),
             switch_code,
             // The offer's envelope itself declares its ICE policy (`ice_policy: "all"` under
@@ -1654,6 +1672,14 @@ impl Client {
         } else {
             key
         });
+        #[cfg(windows)]
+        let rs_pk = rs_pk.or_else(|| {
+            crate::nnu::legacy_peer_signing_key(
+                &Config::get_option("custom-rendezvous-server"),
+                if key.is_empty() { config::RS_PUB_KEY } else { key },
+            )
+            .and_then(get_rs_pk)
+        });
         // A WebRTC channel is peer-authenticated only once its DTLS fingerprint is bound to the
         // verified peer identity below. Once a trusted identity IS established, every binding
         // failure fails closed: any peer able to answer WebRTC also signs its fingerprint, so a
@@ -1794,7 +1820,7 @@ impl Client {
 
         for i in 1..=3 {
             // use different socket due to current hbbs implementation requiring different nat address for each attempt
-            let mut socket = connect_tcp(rendezvous_server, CONNECT_TIMEOUT)
+            let mut socket = crate::nnu_network::connect(rendezvous_server, CONNECT_TIMEOUT)
                 .await
                 .with_context(|| "Failed to connect to rendezvous server")?;
 
@@ -1851,8 +1877,12 @@ impl Client {
         conn_type: ConnType,
         ipv4: bool,
     ) -> ResultType<Stream> {
-        let mut conn = connect_tcp(
-            ipv4_to_ipv6(check_port(relay_server, RELAY_PORT), ipv4),
+        crate::common::check_relay_uuid(&uuid)?;
+        // The proxy's address family does not constrain the relay target.
+        let relay_server = check_port(relay_server, RELAY_PORT);
+        let use_ws_proxy = Config::is_proxy() && is_ws_endpoint(&check_ws(&relay_server));
+        let mut conn = crate::nnu_network::connect(
+            &ipv4_to_ipv6(relay_server, ipv4 || use_ws_proxy),
             CONNECT_TIMEOUT,
         )
         .await
@@ -2328,41 +2358,6 @@ impl AudioBuffer {
     pub fn append_pcm(&mut self, buffer: &[f32]) {
         let having = self.append_pcm2(buffer);
         self.try_shrink(having);
-    }
-}
-
-#[cfg(all(test, not(target_os = "linux")))]
-mod audio_buffer_discontinuity_tests {
-    use super::AudioBuffer;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    };
-
-    const BUFFER_CAPACITY: usize = 4;
-    const BUFFER_LEVELS: usize = 30;
-    const FIRST_INPUT: [f32; 2] = [0.1, 0.2];
-    const OVERFLOWING_INPUT: [f32; 3] = [0.3, 0.4, 0.5];
-    const OVERSIZED_INPUT: [f32; 5] = [0.6, 0.7, 0.8, 0.9, 1.0];
-
-    #[test]
-    fn capacity_discards_signal_discontinuities() {
-        let audio_buffer = AudioBuffer(
-            Arc::new(Mutex::new(ringbuf::HeapRb::new(BUFFER_CAPACITY))),
-            BUFFER_CAPACITY,
-            [0; BUFFER_LEVELS],
-            Arc::new(AtomicUsize::new(0)),
-        );
-
-        assert_eq!(audio_buffer.append_pcm2(&FIRST_INPUT), FIRST_INPUT.len());
-        assert_eq!(audio_buffer.3.load(Ordering::Relaxed), 0);
-        assert_eq!(
-            audio_buffer.append_pcm2(&OVERFLOWING_INPUT),
-            BUFFER_CAPACITY
-        );
-        assert_eq!(audio_buffer.3.load(Ordering::Relaxed), 1);
-        assert_eq!(audio_buffer.append_pcm2(&OVERSIZED_INPUT), BUFFER_CAPACITY);
-        assert_eq!(audio_buffer.3.load(Ordering::Relaxed), 2);
     }
 }
 
@@ -2853,12 +2848,14 @@ struct ConnToken {
 /// Login config handler for [`Client`].
 #[derive(Default)]
 pub struct LoginConfigHandler {
+    pub(crate) nnu_verified_identity_proof: String,
     id: String,
     pub conn_type: ConnType,
     pub is_terminal_admin: bool,
     hash: Hash,
     password: Vec<u8>, // remember password for reconnect
     pub remember: bool,
+    login_method: login_method::LoginMethod,
     config: PeerConfig,
     pub port_forward: (String, i32),
     /// This login's `multiplex`, filled with `port_forward` under the turn
@@ -2888,6 +2885,7 @@ pub struct LoginConfigHandler {
     pub policy_relay: bool,
     // The peer-scoped part of it, and the only part that may be written back to the peer.
     pub peer_relay: bool,
+    pub(crate) nnu_native_fallback: bool,
     pub direct: Option<bool>,
     pub received: bool,
     switch_uuid: Option<String>,
@@ -2897,7 +2895,6 @@ pub struct LoginConfigHandler {
     pub save_ab_password_to_recent: bool, // true: connected with ab password
     pub other_server: Option<(String, String, String)>,
     pub custom_fps: Arc<Mutex<Option<usize>>>,
-    pub last_auto_fps: Option<usize>,
     pub adapter_luid: Option<i64>,
     pub mark_unsupported: Vec<CodecFormat>,
     pub selected_windows_session_id: Option<u32>,
@@ -2937,6 +2934,7 @@ impl LoginConfigHandler {
         adapter_luid: Option<i64>,
         shared_password: Option<String>,
         conn_token: Option<String>,
+        login_method: &str,
     ) {
         let mut id = id;
         if id.contains("@") {
@@ -2977,6 +2975,10 @@ impl LoginConfigHandler {
 
         self.id = id;
         self.conn_type = conn_type;
+        self.login_method = Default::default();
+        if !login_method.is_empty() && !self.set_login_method(login_method) {
+            log::warn!("Failed to initialize login method: {}", login_method);
+        }
         let config = self.load_config();
         self.remember = !config.password.is_empty();
         self.config = config;
@@ -3008,6 +3010,7 @@ impl LoginConfigHandler {
                 || force_relay;
         self.policy_relay = self.peer_relay || Config::is_proxy();
         self.force_relay = self.policy_relay || use_ws();
+        self.nnu_native_fallback = false;
         if let Some((real_id, server, key)) = &self.other_server {
             let other_server_key = self.get_option("other-server-key");
             if !other_server_key.is_empty() && key.is_empty() {
@@ -3697,7 +3700,7 @@ impl LoginConfigHandler {
         let password0 = config.password.clone();
         let remember = self.remember;
         let hash = self.hash.clone();
-        if remember {
+        if remember && !self.skips_saved_password() {
             // remember is true: use PeerConfig password or ui login
             // not sync shared password to recent
             if !password.is_empty()
@@ -3707,7 +3710,7 @@ impl LoginConfigHandler {
                 config.password = password.clone();
                 log::debug!("remember password of {}", self.id);
             }
-        } else {
+        } else if !self.skips_saved_password() {
             if self.password_source.is_personal_ab(&password) {
                 // sync personal ab password to recent automatically
                 config.password = password.clone();
@@ -3734,7 +3737,8 @@ impl LoginConfigHandler {
         #[cfg(feature = "flutter")]
         {
             // sync connected password to personal ab automatically if it is not shared password
-            if !config.password.is_empty()
+            if !self.skips_saved_password()
+                && !config.password.is_empty()
                 && !self.password_source.is_shared_ab(&password, &hash)
                 && !self.password_source.is_personal_ab(&password)
             {
@@ -3769,6 +3773,8 @@ impl LoginConfigHandler {
         // no matter if change, for update file time
         self.save_config(config);
         self.supported_encoding = pi.encoding.clone().unwrap_or_default();
+        #[cfg(feature="flutter")]
+        crate::nnu_account_peers::visit(&self.id, &self.config);
         log::info!("peer info supported_encoding:{:?}", self.supported_encoding);
     }
 
@@ -3886,6 +3892,9 @@ impl LoginConfigHandler {
             avatar,
             ..Default::default()
         };
+        if self.skips_saved_password() {
+            lr.password.clear();
+        }
         match self.conn_type {
             ConnType::FILE_TRANSFER => lr.set_file_transfer(FileTransfer {
                 dir: self.get_remote_dir(),
@@ -3907,6 +3916,11 @@ impl LoginConfigHandler {
             _ => {}
         }
 
+        if crate::nnu_voice_call::outgoing() {
+            lr.set_nnu_voice_call(NnuVoiceCall::new());
+            lr.option = Default::default();
+            lr.password = Default::default();
+        }
         let mut msg_out = Message::new();
         msg_out.set_login_request(lr);
         msg_out
@@ -4470,6 +4484,32 @@ fn _input_os_password(p: String, activate: bool, interface: impl Interface) {
     interface.send(Data::Message(msg_out));
 }
 
+/// Auto Login. A peer that can check for its logon or lock screen gets the password and types it
+/// itself, only if it is there right then. Keys typed from here land in whatever has focus if the
+/// screen is not locked by the time they arrive.
+pub fn auto_login(p: String, pi: &PeerInfo, interface: impl Interface) {
+    if !is_peer_handling_os_login(pi) {
+        input_os_password(p, true, interface);
+        return;
+    }
+    std::thread::spawn(move || {
+        activate_os(&interface, true);
+        std::thread::sleep(Duration::from_millis(1200));
+        let mut msg_out = Message::new();
+        msg_out.set_os_login(OSLogin {
+            password: p,
+            ..Default::default()
+        });
+        interface.send(Data::Message(msg_out));
+    });
+}
+
+/// Windows and macOS peers from the 1.5.1 release handle `os_login`.
+fn is_peer_handling_os_login(pi: &PeerInfo) -> bool {
+    (pi.platform == crate::common::PLATFORM_WINDOWS || pi.platform == crate::common::PLATFORM_MACOS)
+        && hbb_common::get_version_number(&pi.version) >= hbb_common::get_version_number("1.5.1")
+}
+
 #[derive(Copy, Clone)]
 struct LoginErrorMsgBox {
     msgtype: &'static str,
@@ -4637,6 +4677,7 @@ pub async fn handle_hash(
     password_preset: &str,
     hash: Hash,
     interface: &impl Interface,
+    trust: &mut crate::trusted_devices::client::Session,
     peer: &mut Stream,
 ) -> bool {
     lc.write().unwrap().hash = hash.clone();
@@ -4679,6 +4720,17 @@ pub async fn handle_hash(
             allow_err!(peer.send(&msg).await);
             return false;
         }
+    }
+    if crate::nnu_voice_call::outgoing() {
+        if !hash.nnu_voice_call_supported {
+            interface.msgbox("error", "Voice call", "对端版本不支持直接语音呼叫，请更新客户端", "");
+            return false;
+        }
+        if let Err(error) = send_login(lc.clone(), String::new(), String::new(), Vec::new(), trust, peer).await {
+            interface.on_error(&error.to_string());
+            return false;
+        }
+        return true;
     }
     // last password
     let mut password = lc.read().unwrap().password.clone();
@@ -4732,10 +4784,14 @@ pub async fn handle_hash(
 
     lc.write().unwrap().password = password.clone();
 
+    let request_approval = lc.read().unwrap().skips_saved_password();
+
     let is_terminal_admin = lc.read().unwrap().is_terminal_admin;
     let is_terminal = lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL);
     if is_terminal && is_terminal_admin {
-        if password.is_empty() {
+        if request_approval {
+            interface.msgbox("terminal-admin-login-request-approval", "", "", "");
+        } else if password.is_empty() {
             interface.msgbox("terminal-admin-login-password", "", "", "");
         } else {
             interface.msgbox("terminal-admin-login", "", "", "");
@@ -4746,7 +4802,9 @@ pub async fn handle_hash(
 
     let password = if password.is_empty() {
         // login without password, the remote side can click accept
-        interface.msgbox("input-password", "Password Required", "", "");
+        if !request_approval {
+            interface.msgbox("input-password", "Password Required", "", "");
+        }
         Vec::new()
     } else {
         let mut hasher = Sha256::new();
@@ -4755,7 +4813,28 @@ pub async fn handle_hash(
         hasher.finalize()[..].into()
     };
 
-    send_login(lc.clone(), String::new(), String::new(), password, peer).await;
+    if request_approval {
+        interface.msgbox(
+            "wait-remote-accept-nook",
+            "Prompt",
+            "Please wait for the remote side to accept your session request...",
+            "",
+        );
+    }
+
+    if let Err(error) = send_login(
+        lc.clone(),
+        String::new(),
+        String::new(),
+        password,
+        trust,
+        peer,
+    )
+    .await
+    {
+        interface.on_error(&error.to_string());
+        return false;
+    }
     lc.write().unwrap().hash = hash;
     true
 }
@@ -4799,13 +4878,20 @@ async fn send_login(
     os_username: String,
     os_password: String,
     password: Vec<u8>,
+    trust: &mut crate::trusted_devices::client::Session,
     peer: &mut Stream,
-) {
-    let msg_out = lc
-        .read()
-        .unwrap()
-        .create_login_msg(os_username, os_password, password);
-    allow_err!(peer.send(&msg_out).await);
+) -> ResultType<()> {
+    let msg_out = {
+        let mut lc = lc.write().unwrap();
+        let proof = std::mem::take(&mut lc.nnu_verified_identity_proof);
+        let mut message = lc.create_login_msg(os_username, os_password, password);
+        if let Some(message::Union::LoginRequest(login)) = message.union.as_mut() {
+            login.nnu_verified_identity_proof = proof;
+        }
+        message
+    };
+    let msg_out = trust.login(msg_out).await?;
+    peer.send(&msg_out).await
 }
 
 /// Handle login request made from ui.
@@ -4824,8 +4910,9 @@ pub async fn handle_login_from_ui(
     os_password: String,
     password: String,
     remember: bool,
+    trust: &mut crate::trusted_devices::client::Session,
     peer: &mut Stream,
-) {
+) -> ResultType<()> {
     let mut hash_password = if password.is_empty() {
         let mut password2 = lc.read().unwrap().password.clone();
         if password2.is_empty() {
@@ -4850,7 +4937,15 @@ pub async fn handle_login_from_ui(
     hasher2.update(&lc.read().unwrap().hash.challenge);
     hash_password = hasher2.finalize()[..].to_vec();
 
-    send_login(lc.clone(), os_username, os_password, hash_password, peer).await;
+    send_login(
+        lc.clone(),
+        os_username,
+        os_password,
+        hash_password,
+        trust,
+        peer,
+    )
+    .await
 }
 
 async fn send_switch_login_request(
@@ -4885,13 +4980,20 @@ pub trait Interface: Send + Clone + 'static + Sized {
     fn on_error(&self, err: &str) {
         self.msgbox("error", "Error", err, "");
     }
-    async fn handle_hash(&self, pass: &str, hash: Hash, peer: &mut Stream) -> bool;
+    async fn handle_hash(
+        &self,
+        pass: &str,
+        hash: Hash,
+        trust: &mut crate::trusted_devices::client::Session,
+        peer: &mut Stream,
+    ) -> bool;
     async fn handle_login_from_ui(
         &self,
         os_username: String,
         os_password: String,
         password: String,
         remember: bool,
+        trust: &mut crate::trusted_devices::client::Session,
         peer: &mut Stream,
     );
     async fn handle_test_delay(&self, t: TestDelay, peer: &mut Stream);
@@ -5204,6 +5306,28 @@ mod retry_tests {
     }
 }
 
+#[cfg(all(test, feature = "flutter"))]
+mod direct_ip_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bare_ip_reaches_default_listener_and_explicit_port_is_preserved() {
+        for explicit in [false, true] {
+            let listener = tokio::net::TcpListener::bind(if explicit {
+                "127.0.0.1:0"
+            } else {
+                "127.0.0.1:21118"
+            }).await.unwrap();
+            let peer = if explicit { listener.local_addr().unwrap().to_string() } else { "127.0.0.1".to_owned() };
+            let connection = Client::_start(&peer, "", "", ConnType::DEFAULT_CONN,
+                Session::<crate::flutter::FlutterHandler>::default()).await.unwrap();
+            let _accepted = timeout(1000, listener.accept()).await.unwrap().unwrap();
+            assert!(connection.0.1);
+            assert_eq!(connection.0.4, "TCP");
+        }
+    }
+}
+
 #[cfg(test)]
 mod port_forward_mux_tests {
     use super::*;
@@ -5416,7 +5540,6 @@ pub mod peer_online {
     mod tests {
         use crate::client::Client;
         use hbb_common::rendezvous_proto::IceCandidate;
-        use hbb_common::tokio;
 
         #[test]
         fn accepts_webrtc_ice_by_session_key_only() {
@@ -5428,22 +5551,6 @@ pub mod peer_online {
 
             assert!(Client::is_expected_webrtc_ice_candidate(&ice, "session-a"));
             assert!(!Client::is_expected_webrtc_ice_candidate(&ice, "session-b"));
-        }
-
-        #[tokio::test]
-        async fn test_query_onlines() {
-            super::query_online_states(
-                vec![
-                    "152183996".to_owned(),
-                    "165782066".to_owned(),
-                    "155323351".to_owned(),
-                    "460952777".to_owned(),
-                ],
-                |onlines: Vec<String>, offlines: Vec<String>| {
-                    println!("onlines: {:?}, offlines: {:?}", &onlines, &offlines);
-                },
-            )
-            .await;
         }
     }
 }
@@ -5570,7 +5677,7 @@ async fn udp_nat_connect(
 
 #[cfg(test)]
 mod webrtc_race_tests {
-    use super::{race_transports_prefer_webrtc, request_allows_tcp_punch};
+    use super::race_transports_prefer_webrtc;
     use hbb_common::{
         anyhow::anyhow,
         futures::future::{BoxFuture, FutureExt},
@@ -5596,12 +5703,6 @@ mod webrtc_race_tests {
     }
 
     const NOT_P2P: fn(&&'static str) -> bool = |_| false;
-
-    #[test]
-    fn webrtc_request_never_reuses_its_signaling_socket_for_tcp_punch() {
-        assert!(request_allows_tcp_punch(""));
-        assert!(!request_allows_tcp_punch("webrtc://offer"));
-    }
 
     // A direct result must win even when it lands first — the LAN ordering, where ICE beats the
     // relay's TCP connect. Parking it as if it were a relay commits the relay on arrival.
@@ -5661,32 +5762,6 @@ mod webrtc_race_tests {
     }
 
     #[tokio::test]
-    async fn relay_from_preferred_branch_committed_when_window_expires() {
-        let got = race_transports_prefer_webrtc(
-            ok_after(10, "preferred-relay"),
-            vec![ok_after(60_000, "too-slow")],
-            100,
-            NOT_P2P,
-        )
-        .await
-        .unwrap();
-        assert_eq!(got, "preferred-relay");
-    }
-
-    #[tokio::test]
-    async fn preference_window_starts_when_relay_is_ready() {
-        let got = race_transports_prefer_webrtc(
-            ok_after(350, "webrtc"),
-            vec![ok_after(250, "relay")],
-            200,
-            NOT_P2P,
-        )
-        .await
-        .unwrap();
-        assert_eq!(got, "webrtc");
-    }
-
-    #[tokio::test]
     async fn unfinished_ipv6_still_beats_held_relay() {
         let start = Instant::now();
         let got = race_transports_prefer_webrtc(
@@ -5714,36 +5789,6 @@ mod webrtc_race_tests {
         .await
         .unwrap();
         assert_eq!(got, "ipv6");
-    }
-
-    // A relay is held with a direct attempt racing behind it, then WebRTC fails. The held relay
-    // must not be committed while the direct attempt is still in flight.
-    #[tokio::test]
-    async fn held_relay_waits_for_racing_direct_when_webrtc_fails() {
-        let got = race_transports_prefer_webrtc(
-            err_after(50, "webrtc dead"),
-            vec![ok_after(10, "relay"), ok_after(100, "ipv6")],
-            60_000,
-            |t| *t == "ipv6",
-        )
-        .await
-        .unwrap();
-        assert_eq!(got, "ipv6");
-    }
-
-    // Both attempts error, but a relay was parked before they did — it is the outcome, not a
-    // composed error.
-    #[tokio::test]
-    async fn held_relay_survives_both_errors() {
-        let got = race_transports_prefer_webrtc(
-            err_after(50, "webrtc dead"),
-            vec![ok_after(10, "relay"), err_after(100, "ipv6 dead")],
-            60_000,
-            |t| *t == "ipv6",
-        )
-        .await
-        .unwrap();
-        assert_eq!(got, "relay");
     }
 
     #[tokio::test]
@@ -5817,20 +5862,27 @@ mod webrtc_race_tests {
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 
+    // Both legs get the same rendezvous refusal; the UI needs the text verbatim, e.g. the
+    // offline auto-retry matches it whole. Either leg may fail last.
     #[tokio::test]
-    async fn both_failing_compose_error() {
-        let err = race_transports_prefer_webrtc(
-            err_after(10, "webrtc dead"),
-            vec![err_after(20, "relay dead")],
-            1_000,
-            NOT_P2P,
-        )
-        .await
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("webrtc dead") && err.contains("relay dead"), "{}", err);
+    async fn same_failure_on_both_legs_reported_once() {
+        for (webrtc_ms, fallback_ms) in [(10, 20), (20, 10)] {
+            let err = race_transports_prefer_webrtc(
+                err_after(webrtc_ms, "Remote desktop is offline"),
+                vec![err_after(fallback_ms, "Remote desktop is offline")],
+                60_000,
+                NOT_P2P,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.to_string(), "Remote desktop is offline");
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "client/tests/trusted_devices_tests.rs"]
+mod trusted_devices_tests;
 
 #[cfg(test)]
 mod kx_tests {

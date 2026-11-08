@@ -434,7 +434,7 @@ fn a_bitrate_cut_is_owned_by_a_viewers_evidence() {
             let asked: Vec<f32> = qos
                 .users
                 .values()
-                .filter_map(|u| u.delay.ratio_reduction())
+                .filter_map(|u| u.delay.ratio_reduction(qos.adaptive_network))
                 .collect();
             assert!(
                 !asked.is_empty(),

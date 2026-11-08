@@ -1,6 +1,7 @@
 // original cm window in Sciter version.
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -18,9 +19,19 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../common.dart';
 import '../../common/widgets/chat_page.dart';
+import '../../common/widgets/nnu_official_support_badge.dart';
+import '../../common/widgets/nnu_official_support_profile.dart';
+import '../../main.dart' show changeTrustedDockWindow, syncTrustedCmWindow,
+    trustedEndedClient, trustedEndRevealed, desktopVoiceCall, voiceCallArrived, cancelledPasswordDock;
 import '../../models/file_model.dart';
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart';
+import '../widgets/nnu_trusted_request.dart';
+import '../widgets/nnu_connected_dock.dart';
+import '../widgets/nnu_session_ended.dart';
+import '../widgets/nnu_voice_call.dart';
+import '../widgets/nnu_direct_voice_call.dart';
+import '../widgets/nnu_voice_sound.dart';
 
 /// Set only by this window's own close control, and only once the user has confirmed. Any other
 /// way the window can go - a session logout closing every window, the window manager, a native
@@ -40,6 +51,7 @@ class DesktopServerPage extends StatefulWidget {
 class _DesktopServerPageState extends State<DesktopServerPage>
     with WindowListener, AutomaticKeepAliveClientMixin {
   final tabController = gFFI.serverModel.tabController;
+  int? _answeredTrustedRequest;
 
   _DesktopServerPageState() {
     gFFI.ffiModel.updateEventListener(gFFI.sessionId, "");
@@ -78,9 +90,26 @@ class _DesktopServerPageState extends State<DesktopServerPage>
   }
 
   void onRemoveId(String id) {
-    if (tabController.state.value.tabs.isEmpty) {
+    if (tabController.state.value.tabs.isEmpty && trustedEndedClient == null &&
+        cancelledPasswordDock == null) {
       windowManager.close();
     }
+  }
+
+  void _answerTrustedRequest(ServerModel model, Client request, bool accept) {
+    checkClickTime(request.id, () {
+      if (!mounted ||
+          model.trustedDesktopRequest != request ||
+          _answeredTrustedRequest == request.id) {
+        return;
+      }
+      _answeredTrustedRequest = request.id;
+      if (accept) {
+        model.sendLoginResponse(request, true, waitForAuthorization: true);
+      } else {
+        bind.cmCloseConnection(connId: request.id);
+      }
+    });
   }
 
   @override
@@ -93,6 +122,91 @@ class _DesktopServerPageState extends State<DesktopServerPage>
       ],
       child: Consumer<ServerModel>(
         builder: (context, serverModel, child) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) unawaited(syncTrustedCmWindow());
+          });
+          final request = serverModel.trustedDesktopRequest;
+          if (request != null) {
+            return Scaffold(
+              backgroundColor: Colors.transparent,
+              body: GestureDetector(
+                onPanStart: (_) => windowManager.startDragging(),
+                child: NnuTrustedRequest(
+                  key: ValueKey(request.id),
+                  identity: request.officialSupport!,
+                  fullControl: request.canAcceptFullControl,
+                  onAccept: () =>
+                      _answerTrustedRequest(serverModel, request, true),
+                  onReject: () =>
+                      _answerTrustedRequest(serverModel, request, false),
+                ),
+              ),
+            );
+          }
+          final voice = desktopVoiceCall;
+          if (voice != null) {
+            final identity = voice.officialSupport;
+            final name = identity?.accountName.isNotEmpty == true
+                ? identity!.accountName : voice.name.isEmpty ? voice.peerId : voice.name;
+            return Scaffold(backgroundColor: Colors.transparent,
+              body: GestureDetector(onPanStart: (_) {
+                if (voiceCallArrived.value) windowManager.startDragging();
+              }, child: NnuVoiceSound(key: ValueKey(voice.id),
+                tone: voice.incomingVoiceCall ? NnuVoiceTone.incoming : NnuVoiceTone.quiet,
+                builder: (enabled, toggle, stop) => NnuVoiceCall(
+                  name: name, avatarJpeg: identity?.avatarJpeg ?? '',
+                  soundEnabled: enabled, onToggleSound: isWindows ? toggle : null,
+                  incoming: voice.incomingVoiceCall, arrived: voiceCallArrived,
+                  onAccept: () { stop(); bind.cmHandleIncomingVoiceCall(id: voice.id, accept: true); },
+                  onReject: () { stop(); bind.cmHandleIncomingVoiceCall(id: voice.id, accept: false); },
+                  onHangUp: () => bind.cmCloseVoiceCall(id: voice.id),
+                  onMicrophone: () => nnuChooseVoiceMicrophone(context)))));
+          }
+          final dock = serverModel.desktopConnectionDock ?? cancelledPasswordDock;
+          if (dock != null) {
+            void localAction(VoidCallback action) => checkClickTime(dock.id, () {
+                  if (mounted && serverModel.desktopConnectionDock?.id == dock.id) {
+                    action();
+                  }
+                });
+            return NnuConnectedDock(
+              key: ValueKey(dock.id),
+              client: dock,
+              exiting: serverModel.desktopConnectionDock == null,
+              changeWindow: (change) => changeTrustedDockWindow(dock.id, change),
+              runLocalAction: localAction,
+              allowRemoteModification: allowRemoteCMModification(),
+              onDisconnect: () => bind.cmCloseConnection(connId: dock.id),
+              onVoiceCall: dock.authorized && !dock.disconnected &&
+                      !dock.inVoiceCall && !bind.isIncomingOnly() &&
+                      !{'ios', 'android'}.contains(
+                          dock.officialSupport?.peerPlatform.toLowerCase())
+                  ? () => unawaited(nnuStartDirectVoiceCall(context, dock.peerId,
+                      dock.officialSupport?.accountName ?? dock.name))
+                  : null,
+              onOpenFile: dock.authorized && dock.canReverseFileTransfer && !bind.isIncomingOnly()
+                  ? () => unawaited(_openDockFileTransfer(dock))
+                  : null,
+            );
+          }
+          final ended = trustedEndedClient;
+          if (ended != null) {
+            return Scaffold(backgroundColor: Colors.transparent,
+              body: GestureDetector(onPanStart: (_) => windowManager.startDragging(),
+                child: NnuSessionEndTransition(key: ValueKey(ended.id),
+                  identity: ended.officialSupport!, revealed: trustedEndRevealed,
+                  child: NnuSessionEnded(
+                  identity: ended.officialSupport!, peerId: ended.peerId,
+                  onClose: () async {
+                    await bind.cmRemoveDisconnectedConnection(connId: ended.id);
+                    if (!serverModel.clients.any((client) => !client.disconnected)) windowManager.close();
+                  })),
+              ));
+          }
+          if (serverModel.approveMode == 'password' &&
+              !serverModel.clients.any((c) => !c.disconnected)) {
+            return const Scaffold(backgroundColor: Colors.transparent, body: SizedBox.shrink());
+          }
           final body = Scaffold(
             backgroundColor: Theme.of(context).colorScheme.background,
             body: ConnectionManager(),
@@ -110,6 +224,23 @@ class _DesktopServerPageState extends State<DesktopServerPage>
         },
       ),
     );
+  }
+
+  Future<void> _openDockFileTransfer(Client client) async {
+    if (!client.canReverseFileTransfer || bind.isIncomingOnly()) return;
+    try {
+      await Process.start(
+        Platform.resolvedExecutable,
+        ['--file-transfer', client.peerId],
+        mode: ProcessStartMode.detached,
+      );
+    } catch (error) {
+      debugPrint('Could not open trusted session file transfer: $error');
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text(translate('Failed to connect'))));
+      }
+    }
   }
 
   @override
@@ -361,6 +492,52 @@ class ConnectionManagerState extends State<ConnectionManager>
 }
 
 Widget buildConnectionCard(Client client) {
+  if (client.officialSupport != null) {
+    return Consumer<ServerModel>(
+      builder: (context, value, child) {
+        final theme = Theme.of(context);
+        final dark = theme.brightness == Brightness.dark;
+        final ink = dark ? const Color(0xffe6efff) : const Color(0xff203f68);
+        return Theme(
+          data: theme.copyWith(
+            colorScheme: theme.colorScheme.copyWith(
+              background: dark ? const Color(0xff19273e) : const Color(0xffedf3fb),
+              onSurface: ink,
+            ),
+            textTheme: theme.textTheme.apply(
+              fontFamily: nnuOfficialSupportTypography.fontFamily,
+              fontFamilyFallback: nnuOfficialSupportTypography.fontFamilyFallback,
+              bodyColor: ink,
+              displayColor: ink,
+            ),
+            dividerColor:
+                dark ? const Color(0xff3a4e6c) : const Color(0xffb9cde7),
+          ),
+          child: DefaultTextStyle.merge(
+            style: nnuOfficialSupportTypography,
+            child: Column(
+              key: ValueKey(client.id),
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    primary: true,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _CmHeader(client: client),
+                        if (!client.disconnected) _PrivilegeBoard(client: client),
+                      ],
+                    ),
+                  ),
+                ),
+                _CmControlPanel(client: client),
+              ],
+            ).paddingSymmetric(vertical: 4, horizontal: 8),
+          ),
+        );
+      },
+    );
+  }
   return Consumer<ServerModel>(
     builder: (context, value, child) => Column(
       mainAxisAlignment: MainAxisAlignment.start,
@@ -455,6 +632,25 @@ class _CmHeaderState extends State<_CmHeader>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final identity = client.officialSupport;
+    if (identity != null) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(5, 10, 5, 6),
+        child: NnuOfficialSupportProfile(
+          identity,
+          peerId: client.peerId,
+          status: Wrap(
+            spacing: 8,
+            runSpacing: 3,
+            children: [
+              Text(_connectionStatus),
+              if (client.authorized) _duration(),
+            ],
+          ),
+          trailing: _showHeaderAction ? _buildHeaderAction(compact: true) : null,
+        ),
+      );
+    }
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10.0),
@@ -533,49 +729,62 @@ class _CmHeaderState extends State<_CmHeader>
                     child: Row(
                   children: [
                     Text(
-                      client.authorized
-                          ? client.disconnected
-                              ? translate("Disconnected")
-                              : translate("Connected")
-                          : "${translate("Request access to your device")}...",
-                      style: TextStyle(color: Colors.white),
+                      _connectionStatus,
+                      style: const TextStyle(color: Colors.white),
                     ).marginOnly(right: 8.0),
                     if (client.authorized)
-                      Obx(
-                        () => Text(
-                          formatDurationToTime(
-                            Duration(seconds: _time.value),
-                          ),
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      )
+                      _duration(style: const TextStyle(color: Colors.white)),
                   ],
                 ))
               ],
             ),
           ),
           Offstage(
-            offstage: !client.authorized ||
-                (client.type_() != ClientType.remote &&
-                    client.type_() != ClientType.file &&
-                    client.type_() != ClientType.camera),
-            child: IconButton(
-              onPressed: () => checkClickTime(client.id, () {
-                if (client.type_() == ClientType.file) {
-                  gFFI.chatModel.toggleCMFilePage();
-                } else {
-                  gFFI.chatModel
-                      .toggleCMChatPage(MessageKey(client.peerId, client.id));
-                }
-              }),
-              icon: SvgPicture.asset(client.type_() == ClientType.file
-                  ? 'assets/file_transfer.svg'
-                  : 'assets/chat2.svg'),
-              splashRadius: kDesktopIconButtonSplashRadius,
-            ),
-          )
+            offstage: !_showHeaderAction,
+            child: _buildHeaderAction(),
+          ),
         ],
       ),
+    );
+  }
+
+  String get _connectionStatus => client.authorized
+      ? translate(client.disconnected ? 'Disconnected' : 'Connected')
+      : "${translate("Request access to your device")}...";
+
+  Widget _duration({TextStyle? style}) => Obx(
+        () => Text(
+          formatDurationToTime(Duration(seconds: _time.value)),
+          style: style,
+        ),
+      );
+
+  bool get _showHeaderAction => client.authorized &&
+      (client.type_() == ClientType.remote ||
+          client.type_() == ClientType.file ||
+          client.type_() == ClientType.camera);
+
+  Widget _buildHeaderAction({bool compact = false}) {
+    final file = client.type_() == ClientType.file;
+    return IconButton(
+      onPressed: () => checkClickTime(client.id, () {
+        if (file) {
+          gFFI.chatModel.toggleCMFilePage();
+        } else {
+          gFFI.chatModel.toggleCMChatPage(MessageKey(client.peerId, client.id));
+        }
+      }),
+      icon: SvgPicture.asset(
+        file ? 'assets/file_transfer.svg' : 'assets/chat2.svg',
+        colorFilter: compact
+            ? svgColor(Theme.of(context).colorScheme.onSurface)
+            : null,
+      ),
+      splashRadius: kDesktopIconButtonSplashRadius,
+      tooltip: compact ? translate(file ? 'Transfer file' : 'Chat') : null,
+      constraints:
+          compact ? const BoxConstraints.tightFor(width: 38, height: 34) : null,
+      padding: compact ? const EdgeInsets.all(6) : const EdgeInsets.all(8),
     );
   }
 
@@ -676,7 +885,7 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
         color: Theme.of(context).colorScheme.background,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withOpacity(client.officialSupport == null ? .2 : .08),
             spreadRadius: 1,
             blurRadius: 1,
             offset: Offset(0, 1.5),
@@ -688,7 +897,15 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
         children: [
           Text(
             translate("Permissions"),
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              fontSize: client.officialSupport == null ? 16 : 15,
+              fontWeight: client.officialSupport == null
+                  ? FontWeight.bold
+                  : FontWeight.w500,
+              color: client.officialSupport == null
+                  ? null
+                  : Theme.of(context).colorScheme.onSurface,
+            ),
             textAlign: TextAlign.center,
           ).marginOnly(left: 4.0, bottom: 8.0),
           Expanded(

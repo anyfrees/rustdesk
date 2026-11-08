@@ -9,17 +9,17 @@ import shutil
 from cryptography.hazmat.primitives import serialization
 
 
-def prepare(source, destination, key_path, build, version, notes):
+def prepare(source, destination, key_path, build, version, notes, artifact_version='1.5.0'):
     key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
     target = destination / 'releases' / str(build)
     if target.exists():
         raise ValueError('This build already exists. Use a new immutable build number.')
     target.mkdir(parents=True)
     artifacts = {}
-    files = {'portable': 'RustDesk-NNU-1.5.0-x64-Portable.exe',
-             'install': 'RustDesk-NNU-1.5.0-x64-Install.exe',
-             'msi': 'RustDesk-NNU-1.5.0-x64.msi',
-             'zip': 'RustDesk-NNU-1.5.0-x64.zip'}
+    files = {'portable': f'RustDesk-NNU-{artifact_version}-x64-Portable.exe',
+             'install': f'RustDesk-NNU-{artifact_version}-x64-Install.exe',
+             'msi': f'RustDesk-NNU-{artifact_version}-x64.msi',
+             'zip': f'RustDesk-NNU-{artifact_version}-x64.zip'}
     for kind, pattern in files.items():
         path = source / pattern
         if not path.is_file():
@@ -51,7 +51,8 @@ if __name__ == '__main__':
     parser.add_argument('--build', type=int, required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--notes', type=Path, required=True)
+    parser.add_argument('--artifact-version', default='1.5.0')
     args = parser.parse_args()
     manifest = prepare(args.source, args.output, args.key, args.build, args.version,
-                       args.notes.read_text(encoding='utf-8'))
+                       args.notes.read_text(encoding='utf-8'), args.artifact_version)
     print(f"Signed stable release {manifest['version']} (build {manifest['build']}); {len(manifest['artifacts'])} packages")

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light">
+  <title>NNU · 版本管理</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/update-admin/assets/style.css">
+  <script src="/update-admin/assets/app.js" defer></script>
+  <script src="/update-admin/assets/platforms.js" defer></script>
+  <script src="/update-admin/assets/download-settings.js" defer></script>
+  <script src="/update-admin/assets/login-protection.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a class="wordmark" href="/update-admin/">NNU <span>RustDesk</span></a><div id="account" hidden><button id="account-open" class="text-button" aria-label="账户设置"><span id="username"></span></button><button id="logout" class="text-button">退出</button></div></header>
+  <main>
+    <section id="login-view" class="login panel" aria-labelledby="login-title" hidden>
+      <h1 id="login-title">版本管理</h1>
+      <p class="login-caption muted">登录后管理更新包与客户端发布。</p>
+      <form id="login-form">
+        <div class="login-field"><label for="login-user">账号</label><input id="login-user" autocomplete="username" required maxlength="80" autocapitalize="none" spellcheck="false" aria-describedby="login-error"></div>
+        <div class="login-field"><label for="login-password">密码</label><input id="login-password" type="password" autocomplete="current-password" required maxlength="512" aria-describedby="login-error"></div>
+        <div id="login-protection" hidden><p id="login-protection-status" class="fine" role="status"></p><div id="login-challenge"></div><button id="login-challenge-retry" class="text-button" type="button" hidden>重新验证</button></div>
+        <p id="login-error" class="error" role="alert"></p><button id="password-login" type="submit" class="primary wide">登录</button>
+      </form>
+      <div class="login-divider" aria-hidden="true">或</div>
+      <button id="passkey-login" type="button" class="secondary wide passkey-login">使用 Passkey 登录</button>
+    </section>
+    <div id="workspace" hidden>
+      <div class="page-heading"><div><h1>版本发布</h1></div><div class="publish-methods"><button id="external-open" class="secondary">外部地址发布</button><button id="import-open" class="primary"><span aria-hidden="true">＋</span> 导入发布包</button></div></div>
+      <div id="page-error" class="error" role="alert"></div>
+      <section class="current panel" aria-labelledby="current-title">
+        <div class="current-main"><div class="section-top"><h2 id="current-title">当前版本</h2><span id="push-status" class="status"></span></div>
+          <h3 id="current-version" class="version">—</h3><div id="current-meta" class="muted mono"></div><p id="current-notes" class="notes"></p>
+          <div id="packages" class="packages"></div>
+        </div>
+        <aside class="push-control"><div><h3>客户端推送</h3><p id="push-caption" class="muted"></p></div><button id="push-button" class="secondary">暂停推送</button></aside>
+      </section>
+      <section class="platform-panel panel" aria-labelledby="platform-title">
+        <div class="section-top"><h2 id="platform-title">多平台更新</h2><button id="platform-import" class="secondary">导入多平台发布包</button></div>
+        <p class="fine">统一校验、发布和下载。Windows 沿用现有自动升级；Android/Linux 在线检查并下载，安装由用户确认。</p>
+        <p class="fine">各平台保留当前正式版和一个历史版本；发布后物理删除更早的安装包及归档，操作日志保留。</p>
+        <div id="platform-current" class="platform-current"></div>
+        <h3 class="platform-history-title">多平台版本记录</h3><div id="platform-history"></div>
+        <p id="platform-error" class="error" role="alert"></p>
+      </section>
+      <section class="download-settings panel" aria-labelledby="download-settings-title">
+        <div class="section-top"><h2 id="download-settings-title">下载首页与安全验证</h2><a href="/" class="text-button">查看软件下载首页 ↗</a></div>
+        <p class="fine">网页下载使用 Turnstile 验证、短时凭证和排队。客户端自动更新不限速、不排队，原用户登录入口保持可用。</p>
+        <p class="fine">为兼容自动更新，旧安装包直链仍公开可访问；网页验证和排队无法阻挡针对这些直链的请求。</p>
+        <p id="download-settings-status" class="fine" role="status"></p><form id="download-settings-form" class="external-form">
+          <label for="download-site-key">Turnstile 站点公钥</label><input id="download-site-key" maxlength="128" autocomplete="off" spellcheck="false" required>
+          <label for="download-secret">Turnstile 服务端密钥</label><input id="download-secret" type="password" maxlength="256" autocomplete="new-password" placeholder="已配置时留空则保留，不回显密钥" aria-describedby="download-secret-help"><p id="download-secret-help" class="fine">仅保存在服务器私有配置中。Turnstile 小组件须允许 rd.nnu.cn，操作名称为 software_download。</p>
+          <div class="download-policy-fields"><div><label for="download-slots">网页并发名额</label><input id="download-slots" type="number" min="1" max="4" value="2" required></div><div><label for="download-rate">单次速率上限（KB/s）</label><input id="download-rate" type="number" min="128" max="2048" value="512" required></div><div><label for="download-queue-size">最多排队人数</label><input id="download-queue-size" type="number" min="5" max="100" value="40" required></div></div>
+          <p class="fine">排队每 45 秒需在线心跳；轮到后 30 秒内开始下载，下载最多占位 20 分钟。完成、断开或超时释放名额。修改配置将撤销尚未开始的排队凭证，已开始的下载继续完成。</p>
+          <label for="download-settings-password">当前后台密码</label><input id="download-settings-password" type="password" required maxlength="512" autocomplete="current-password">
+          <p id="download-settings-error" class="error" role="alert"></p><div class="dialog-actions"><button id="download-settings-save" class="primary" type="submit">保存下载配置</button></div>
+        </form>
+      </section>
+      <section class="announcement panel" aria-labelledby="announcement-title">
+        <div class="section-top"><h2 id="announcement-title">客户端公告</h2><span id="announcement-state" class="status paused">未发布</span></div>
+        <p class="fine">公告显示在客户端底部，约 5 分钟同步。所有主题支持轮播，保存草稿不会更改已发布内容。</p>
+        <div id="announcement-published" class="announcement-published" hidden><strong id="announcement-live-title"></strong><p id="announcement-live-body" class="notes"></p><span id="announcement-live-date" class="fine"></span></div>
+        <form id="announcement-form" class="external-form">
+          <div class="announcement-list-heading"><strong>通知列表 <span id="announcement-count" class="count"></span></strong><button id="announcement-add" type="button" class="secondary">添加通知</button></div>
+          <div id="announcement-items" class="announcement-items" aria-label="公告顺序"></div>
+          <div class="announcement-interval"><label for="announcement-interval">自动轮播间隔</label><select id="announcement-interval"><option value="5">5 秒</option><option value="8" selected>8 秒</option><option value="10">10 秒</option><option value="15">15 秒</option><option value="20">20 秒</option><option value="30">30 秒</option><option value="60">60 秒</option></select></div>
+          <div id="announcement-editor">
+          <div class="announcement-design-grid">
+            <div><label for="announcement-theme">公告主题</label><select id="announcement-theme"><option value="clean">清爽细栏</option><option value="safety">安全提示</option><option value="capsule">悬浮胶囊</option><option value="editorial">双层卡片</option><option value="rotation">多主题轮播</option><option value="obsidian">曜石黑</option><option value="titanium">钛金黑</option><option value="glass">液态玻璃</option><option value="frosted">磨砂材质</option></select></div>
+            <div><label for="announcement-icon">前置图标</label><select id="announcement-icon"><option value="auto">跟随主题</option><option value="megaphone">扩音器</option><option value="shield">安全盾牌</option><option value="bell">铃铛</option><option value="warning">警示</option><option value="info">信息</option><option value="wrench">维护工具</option><option value="sparkles">星光</option><option value="calendar">日程</option><option value="support">技术支持</option><option value="network">网络</option><option value="none">无图标</option></select></div>
+            <div><label for="announcement-motion">切换动效</label><select id="announcement-motion"><option value="auto">跟随主题</option><option value="fade">轻柔浮现</option><option value="sway">图标轻摆</option><option value="breathe">图标轻呼吸</option><option value="none">关闭动效</option></select></div>
+          </div>
+          <div class="announcement-design-grid announcement-typography">
+            <div><label for="announcement-title-font">标题字体</label><select id="announcement-title-font"><option value="auto">跟随主题</option><option value="sans">系统黑体</option><option value="serif">宋体</option><option value="mono">等宽字体</option></select></div>
+            <div><label for="announcement-title-size">标题字号</label><select id="announcement-title-size"><option value="0">跟随主题</option><option value="12">12 px</option><option value="13">13 px</option><option value="14">14 px</option><option value="16">16 px</option><option value="18">18 px</option></select></div>
+            <div><label for="announcement-title-weight">标题字重</label><select id="announcement-title-weight"><option value="auto">跟随主题</option><option value="normal">常规</option><option value="medium">中等</option><option value="bold">加粗</option></select></div>
+            <div><label for="announcement-title-color">标题颜色</label><div class="announcement-color"><input id="announcement-title-color" type="color" value="#26785b" aria-describedby="announcement-appearance-help"><label><input id="announcement-title-auto" type="checkbox" checked> 跟随主题</label></div></div>
+            <div><label for="announcement-icon-color">图标颜色</label><div class="announcement-color"><input id="announcement-icon-color" type="color" value="#26785b" aria-describedby="announcement-appearance-help"><label><input id="announcement-icon-auto" type="checkbox" checked> 跟随主题</label></div></div>
+            <div class="announcement-appearance-reset"><button id="announcement-appearance-reset" type="button" class="secondary">恢复主题默认</button></div>
+          </div>
+          <p id="announcement-appearance-help" class="fine">每条通知独立设置；字体依设备可用字体回退。低对比度颜色会自动调整以保持可读，高对比度模式跟随系统。</p>
+          <label for="announcement-heading">公告标题</label><input id="announcement-heading" maxlength="80" aria-describedby="announcement-error">
+          <label for="announcement-body">公告正文</label><textarea id="announcement-body" maxlength="2000" rows="3" aria-describedby="announcement-error announcement-help"></textarea>
+          <label class="announcement-enabled"><input id="announcement-enabled" type="checkbox" checked> 发布时显示此通知</label>
+          <button id="announcement-preview-replay" type="button" class="text-button">预览动效</button><div class="announcement-preview-stage"><div id="announcement-preview" class="announcement-preview" data-theme="clean"><span id="announcement-preview-icon" aria-hidden="true"></span><div><strong id="announcement-preview-title"></strong><p id="announcement-preview-body"></p></div><span aria-hidden="true">›</span></div></div>
+          </div>
+          <p id="announcement-help" class="fine">纯文本，标题最多 80 字、正文最多 2000 字。长公告可在客户端点击查看全文。</p>
+          <p id="announcement-error" class="error" role="alert"></p>
+          <div class="announcement-actions"><button id="announcement-withdraw" type="button" class="text-button" hidden>撤下公告</button><div class="publish-methods"><button id="announcement-save" type="submit" class="secondary">保存草稿</button><button id="announcement-publish" type="button" class="primary">发布全部通知</button></div></div>
+        </form>
+      </section>
+      <section class="activity" aria-labelledby="activity-title"><div class="activity-heading"><h2 id="activity-title">下载请求</h2><span class="muted">近 7 天 · 服务器访问日志</span></div><div class="activity-body"><div class="metric"><strong id="request-total">—</strong><span class="muted">次请求</span></div><div class="metric"><strong id="transfer-total">—</strong><span class="muted">传输流量</span></div><div id="chart" class="chart" aria-label="最近七天下载请求"></div></div><p id="stats-caption" class="fine">包含重试和分段请求，不代表安装人数。</p></section>
+      <section class="history" aria-labelledby="history-title"><div class="section-heading"><h2 id="history-title">版本记录 <span id="history-count" class="count"></span></h2><button id="refresh" class="text-button">刷新</button></div><div class="table-wrap"><table><thead><tr><th>版本</th><th>构建号</th><th>导入时间</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="release-rows"></tbody></table></div></section>
+      <details class="audit"><summary>操作记录</summary><ul id="events"></ul></details>
+      <footer>rd.nnu.cn</footer>
+    </div>
+    <p id="loading" class="initial-loading" role="status">正在加载…</p>
+  </main>
+  <dialog id="import-dialog" aria-labelledby="import-title"><div class="dialog-heading"><div><h2 id="import-title">导入发布包</h2></div><button id="import-close" class="icon-button" aria-label="关闭">×</button></div>
+    <div id="upload-step"><label class="dropzone" id="dropzone" for="bundle-file"><span class="upload-symbol" aria-hidden="true">↑</span><strong>选择或拖入 ZIP 发布包</strong><span class="muted">包含 stable.json 与安装包</span><input id="bundle-file" type="file" accept=".zip,application/zip"></label>
+      <div id="upload-progress" hidden><div class="progress-label"><span id="upload-label">正在上传</span><span id="upload-percent"></span></div><progress id="progress" max="100" value="0"></progress></div>
+      <p class="fine">发布包在本机完成签名。上传后先验证，再由你点击发布。</p>
+    </div>
+    <div id="preview-step" hidden><div class="preview-head"><span class="status">验证通过</span><h3 id="preview-version"></h3><span id="preview-build" class="muted mono"></span></div><p id="preview-notes" class="notes"></p><div id="preview-files" class="preview-files"></div><p id="preview-message" class="fine"></p><div class="dialog-actions"><button id="preview-later" class="secondary">稍后发布</button><button id="publish-button" class="primary">发布此版本</button></div></div>
+    <p id="import-error" class="error" role="alert"></p>
+  </dialog>
+  <dialog id="platform-dialog" aria-labelledby="platform-dialog-title">
+    <div class="dialog-heading"><h2 id="platform-dialog-title">导入多平台发布包</h2><button id="platform-close" class="icon-button" aria-label="关闭多平台发布">×</button></div>
+    <label class="dropzone" for="platform-file"><span class="upload-symbol" aria-hidden="true">↑</span><strong>选择多平台发布包 ZIP</strong><span class="muted">由 RUSTDESK版本发布助手生成</span><input id="platform-file" type="file" accept=".zip,application/zip" aria-describedby="platform-dialog-error platform-upload-status"></label>
+    <p class="fine platform-caption">签名和文件校验通过后可预览、发布。含 Windows 时一并更新；Android/Linux 安装仍需用户确认。</p>
+    <p id="platform-upload-status" class="fine" role="status"></p><progress id="platform-progress" max="100" value="0" hidden aria-label="多平台发布包上传进度"></progress>
+    <div id="platform-preview"></div><p id="platform-dialog-error" class="error" role="alert"></p>
+  </dialog>
+  <dialog id="account-dialog" aria-labelledby="account-title">
+    <div class="dialog-heading"><h2 id="account-title">账户设置</h2><button id="account-close" class="icon-button" aria-label="关闭账户设置">×</button></div>
+    <form id="account-form" class="account-form">
+      <label for="account-user">用户名</label><input id="account-user" autocomplete="username" required minlength="3" maxlength="64" aria-describedby="account-error">
+      <label for="account-new-password">新密码</label><input id="account-new-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" placeholder="留空则不修改" aria-describedby="account-error">
+      <label for="account-confirm-password">确认新密码</label><input id="account-confirm-password" type="password" autocomplete="new-password" maxlength="128" aria-describedby="account-error">
+      <label for="account-current-password">当前密码</label><input id="account-current-password" type="password" autocomplete="current-password" required maxlength="512" aria-describedby="account-error account-password-hint passkey-error">
+      <p id="account-password-hint" class="fine">保存修改、添加或撤销 Passkey 时验证。</p>
+      <p id="account-error" class="error" role="alert"></p>
+      <div class="dialog-actions"><button id="account-save" type="submit" class="primary">保存修改</button></div>
+    </form>
+    <section class="passkey-section" aria-labelledby="passkeys-title"><h3 id="passkeys-title">Passkey</h3><ul id="passkey-list" class="passkey-list"></ul>
+      <div class="passkey-add"><label class="sr-only" for="passkey-name">Passkey 名称</label><input id="passkey-name" maxlength="60" placeholder="名称，如：工作电脑" aria-describedby="passkey-error"><button id="passkey-add" class="secondary">添加 Passkey</button></div>
+      <p id="passkey-error" class="error" role="alert"></p><p id="passkey-status" class="fine" role="status"></p>
+    </section>
+  </dialog>
+  <dialog id="external-dialog" aria-labelledby="external-title">
+    <div class="dialog-heading"><h2 id="external-title">外部地址发布</h2><button id="external-close" class="icon-button" aria-label="关闭外部地址发布">×</button></div>
+    <p class="muted external-caption">安装包放在你的自建网盘，客户端从网盘直接下载。支持 HTTPS 链接跳转到文件直链。</p>
+    <form id="external-form" class="external-form">
+      <div class="external-version"><div><label for="external-version">版本名称</label><input id="external-version" required maxlength="80" placeholder="如：1.5.0 NNU UI13" autocomplete="off"></div><div><label for="external-build">内部构建号</label><input id="external-build" type="number" required min="1" step="1" inputmode="numeric" aria-describedby="external-build-hint"></div></div>
+      <p id="external-build-hint" class="fine">自动填写下一个构建号；须与安装包实际构建号一致，不能重复或回退。</p>
+      <label for="external-portable">便携版 EXE 地址</label><input id="external-portable" type="url" required maxlength="4096" placeholder="https://你的网盘/下载链接" autocomplete="off" spellcheck="false">
+      <label for="external-install">安装版 EXE 地址</label><input id="external-install" type="url" required maxlength="4096" placeholder="https://你的网盘/下载链接" autocomplete="off" spellcheck="false">
+      <label for="external-msi">MSI 安装包地址</label><input id="external-msi" type="url" required maxlength="4096" placeholder="https://你的网盘/下载链接" autocomplete="off" spellcheck="false">
+      <label for="external-zip">ZIP 文件夹版地址</label><input id="external-zip" type="url" required maxlength="4096" placeholder="https://你的网盘/下载链接" autocomplete="off" spellcheck="false">
+      <label for="external-notes">更新说明 <span class="muted">（可选）</span></label><textarea id="external-notes" maxlength="8000" rows="3"></textarea>
+      <p class="fine">后台仅在校验时读取一次文件，自动计算大小和 SHA256，不保存安装包副本。链接应长期有效、无需登录；Windows 四类包需来自同一次构建。</p>
+      <p id="external-error" class="error" role="alert"></p><p id="external-status" class="fine" role="status" aria-live="polite"></p>
+      <div class="dialog-actions"><button id="external-submit" type="submit" class="primary">校验链接并预览</button></div>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-copy" class="muted"></p><p id="confirm-error" class="error" role="alert"></p><div class="dialog-actions"><button id="confirm-cancel" class="secondary">取消</button><button id="confirm-ok" class="primary">确认</button></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body></html>

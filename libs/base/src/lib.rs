@@ -1,6 +1,7 @@
 pub mod config;
 pub mod fs;
 pub mod keyboard;
+pub mod network_adaptation;
 pub mod platform;
 pub mod protos;
 

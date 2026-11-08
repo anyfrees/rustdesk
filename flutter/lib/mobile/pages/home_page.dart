@@ -4,6 +4,7 @@ import 'package:flutter_hbb/mobile/pages/settings_page.dart';
 import 'package:flutter_hbb/web/settings_page.dart';
 import 'package:get/get.dart';
 import '../../common.dart';
+import '../../desktop/widgets/nnu_support.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
@@ -150,7 +151,7 @@ class HomePageState extends State<HomePage> {
         ],
       );
     }
-    return Text(bind.mainGetAppNameSync());
+    return Text(isAndroid ? nnuSupportTitle : bind.mainGetAppNameSync());
   }
 }
 
@@ -208,6 +209,7 @@ class WebHomePage extends StatelessWidget {
     bool isTerminal = false;
     String? id;
     String? password;
+    var loginMethod = '';
     for (int i = 0; i < args.length; i++) {
       switch (args[i]) {
         case '--connect':
@@ -240,6 +242,9 @@ class WebHomePage extends StatelessWidget {
           password = args[i + 1];
           i++;
           break;
+        case '--request-approval':
+          loginMethod = 'request-approval';
+          break;
         default:
           break;
       }
@@ -249,6 +254,7 @@ class WebHomePage extends StatelessWidget {
         isFileTransfer: isFileTransfer, 
         isViewCamera: isViewCamera, 
         isTerminal: isTerminal,
+        loginMethod: loginMethod,
         password: password);
     }
   }

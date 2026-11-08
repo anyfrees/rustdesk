@@ -12,6 +12,54 @@
 
 #pragma comment(lib, "Shlwapi.lib")
 
+UINT __stdcall NnuAuthorizeUninstall(MSIHANDLE hInstall)
+{
+    LPWSTR folder = nullptr;
+    LPWSTR product = nullptr;
+    int uiLevel = 0;
+    STARTUPINFOW startup = { sizeof(STARTUPINFOW) };
+    PROCESS_INFORMATION process = {};
+    DWORD code = ERROR_INSTALL_FAILURE;
+    HRESULT hr = WcaInitialize(hInstall, "NnuAuthorizeUninstall");
+    if (FAILED(hr)) return ERROR_INSTALL_FAILURE;
+    hr = WcaGetProperty(L"INSTALLFOLDER_INNER", &folder);
+    if (SUCCEEDED(hr)) hr = WcaGetProperty(L"ProductName", &product);
+    if (SUCCEEDED(hr)) hr = WcaGetIntProperty(L"UILevel", &uiLevel);
+    if (SUCCEEDED(hr)) {
+        HKEY protection = nullptr;
+        const std::wstring policy = L"Software\\NNU\\" + std::wstring(product) + L"\\TeachingProtection";
+        LSTATUS policyStatus = RegOpenKeyExW(HKEY_LOCAL_MACHINE, policy.c_str(), 0,
+            KEY_QUERY_VALUE | KEY_WOW64_64KEY, &protection);
+        if (policyStatus == ERROR_SUCCESS) {
+            policyStatus = RegQueryValueExW(protection, L"PinVerifier", nullptr, nullptr, nullptr, nullptr);
+            RegCloseKey(protection);
+        }
+        if (policyStatus == ERROR_FILE_NOT_FOUND) {
+            ReleaseStr(folder);
+            ReleaseStr(product);
+            return WcaFinalize(ERROR_SUCCESS);
+        }
+        if (policyStatus != ERROR_SUCCESS) {
+            ReleaseStr(folder);
+            ReleaseStr(product);
+            return WcaFinalize(ERROR_INSTALL_USEREXIT);
+        }
+        std::wstring exe = std::wstring(folder) + product + L".exe";
+        std::wstring command = L"\"" + exe + L"\" --nnu-authorize-uninstall";
+        if (uiLevel <= 2) command += L" --quiet";
+        if (CreateProcessW(exe.c_str(), &command[0], nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW, nullptr, folder, &startup, &process)) {
+            if (WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0)
+                GetExitCodeProcess(process.hProcess, &code);
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+    }
+    ReleaseStr(folder);
+    ReleaseStr(product);
+    return WcaFinalize(code == 0 ? ERROR_SUCCESS : ERROR_INSTALL_USEREXIT);
+}
+
 UINT __stdcall CustomActionHello(
     __in MSIHANDLE hInstall)
 {

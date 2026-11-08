@@ -30,8 +30,8 @@ chatbox = open('src/ui/chatbox.html').read()
 install = open('src/ui/install.html').read().replace('include "install.tis";', open('src/ui/install.tis').read())
 
 cm = open('src/ui/cm.html').read() \
-    .replace('@import url(cm.css);', open('src/ui/cm.css').read()) \
-    .replace('include "cm.tis";', open('src/ui/cm.tis').read())
+    .replace('@import url(cm.css);', open('src/ui/cm.css').read().replace('@import url(nnu_cm.css);', open('src/ui/nnu_cm.css').read())) \
+    .replace('include "cm.tis";', open('src/ui/cm.tis').read().replace('include "nnu_cm.tis";', open('src/ui/nnu_cm.tis', encoding='UTF8').read()))
 
 
 def compress(s):

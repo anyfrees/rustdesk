@@ -180,6 +180,14 @@ span.clear-input:hover {
     width: 320px;
 }
 
+.nnu-connect-install { flow: horizontal; border-spacing: 16px; }
+.nnu-connect-install > .install-me { margin: 0; width: *; min-width: 220px; max-width: 380px; }
+.nnu-install-result { font-size: 0.9em; line-height: 1.5em; margin-top: 12px; }
+@media width < 890px {
+    .nnu-connect-install { flow: vertical; }
+    .nnu-connect-install > .install-me { min-width: 0; max-width: none; width: *; }
+}
+
 .right-buttons {
     text-align: right;
 }

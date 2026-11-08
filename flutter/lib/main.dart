@@ -16,6 +16,15 @@ import 'package:flutter_hbb/desktop/screen/desktop_port_forward_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_remote_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_terminal_screen.dart';
 import 'package:flutter_hbb/desktop/widgets/refresh_wrapper.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_pin_dialog.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_support.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_trusted_request.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_connected_dock_window.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_session_ended.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_password_connection.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_voice_call.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_direct_voice_call.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_update_window_state.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -29,6 +38,7 @@ import 'mobile/pages/home_page.dart';
 import 'mobile/pages/server_page.dart';
 import 'mobile/widgets/deploy_dialog.dart';
 import 'models/platform_model.dart';
+import 'models/server_model.dart' show Client;
 
 /// Basic window and launch properties.
 int? kWindowId;
@@ -44,6 +54,15 @@ Future<void> main(List<String> args) async {
 
   if (!isDesktop) {
     runMobileApp();
+    return;
+  }
+  if (isWindows && args.isNotEmpty && args.first == '--nnu-pin-dialog') {
+    await runNnuPinDialog(args.length > 1 ? args[1] : '验证操作');
+    return;
+  }
+  if (isWindows && args.length > 1 && args.first == '--nnu-voice-call') {
+    await initEnv(kAppTypeDesktopRemote);
+    await runNnuDirectVoiceCall(args[1], args.length > 2 ? args[2] : args[1]);
     return;
   }
   // main window
@@ -158,7 +177,9 @@ void runMainApp(bool startService) async {
     // Check the startup argument, if we successfully handle the argument, we keep the main window hidden.
     final handledByUniLinks = await initUniLinks();
     debugPrint("handled by uni links: $handledByUniLinks");
-    if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs)) {
+    if (isWindows && await nnuRestoreUpdateWindow(kBootArgs)) {
+      // Preserve the update's background or minimized state before any show call.
+    } else if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs)) {
       windowManager.hide();
     } else {
       windowManager.show();
@@ -284,6 +305,7 @@ void runMultiWindow(
 
 void runConnectionManagerScreen() async {
   await initEnv(kAppTypeConnectionManager);
+  await gFFI.serverModel.updatePasswordModel();
   _runApp(
     '',
     const DesktopServerPage(),
@@ -291,62 +313,253 @@ void runConnectionManagerScreen() async {
   );
   final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
   gFFI.serverModel.hideCm = hide;
+  await gFFI.serverModel.updateClientState();
   if (hide) {
     await hideCmWindow(isStartup: true);
   } else {
     await showCmWindow(isStartup: true);
   }
+  await syncTrustedCmWindow();
   setResizable(false);
   // Start the uni links handler and redirect links to Native, not for Flutter.
   listenUniLinks(handleByFlutter: false);
 }
 
 bool _isCmReadyToShow = false;
+enum _CmWindowMode { standard, prompt, dock, ended, voice }
+
+_CmWindowMode _cmWindowMode = _CmWindowMode.standard;
+int? _cmDockConnectionId;
+int? _cmVoiceConnectionId;
+final voiceCallArrived = ValueNotifier(false);
+Client? get desktopVoiceCall => nnuDesktopVoiceClient(gFFI.serverModel.clients);
+Client? _cmLastDockClient;
+Client? get cancelledPasswordDock => nnuCancelledPasswordDock(
+    _cmLastDockClient, gFFI.serverModel.clients,
+    wasDock: _cmWindowMode == _CmWindowMode.dock,
+    visiblePasswordMode: gFFI.serverModel.approveMode == 'password' && !gFFI.serverModel.hideCm);
+final trustedEndRevealed = ValueNotifier(false);
+Client? get trustedEndedClient => nnuTrustedEndedClient(gFFI.serverModel.clients,
+    previousDock: _cmLastDockClient, showWindow: !gFFI.serverModel.hideCm);
+bool? _cmPreviousAlwaysOnTop;
+bool? _cmPreviousSkipTaskbar;
+Future<void> _cmWindowLayout = Future.value();
+
+Future<void> _queueCmWindowChange(Future<void> Function() change) {
+  _cmWindowLayout = _cmWindowLayout.then((_) => change()).catchError((Object error) {
+    debugPrint('Could not update trusted connection window: $error');
+  });
+  return _cmWindowLayout;
+}
+
+Future<bool> changeTrustedDockWindow(
+    int connectionId, Future<void> Function() change) async {
+  var applied = false;
+  await _queueCmWindowChange(() async {
+    if (_cmWindowMode != _CmWindowMode.dock ||
+        gFFI.serverModel.desktopConnectionDock?.id != connectionId) return;
+    await change();
+    applied = true;
+  });
+  return applied;
+}
+
+Future<void> syncTrustedCmWindow() {
+  if (!_isCmReadyToShow) return Future.value();
+  return _queueCmWindowChange(() async {
+    final model = gFFI.serverModel;
+    final dock = model.desktopConnectionDock;
+    if (dock != null) _cmLastDockClient = dock;
+    if (model.hideCm || (dock == null && model.clients.any((client) => !client.disconnected))) {
+      _cmLastDockClient = null;
+    }
+    final mode = model.trustedDesktopRequest != null
+        ? _CmWindowMode.prompt
+        : desktopVoiceCall != null ? _CmWindowMode.voice
+        : model.desktopConnectionDock != null
+            ? _CmWindowMode.dock
+            : trustedEndedClient != null
+                ? _CmWindowMode.ended : _CmWindowMode.standard;
+    final dockId = model.desktopConnectionDock?.id;
+    final voiceId = desktopVoiceCall?.id;
+    if (mode == _cmWindowMode &&
+        (mode != _CmWindowMode.dock || dockId == _cmDockConnectionId) &&
+        (mode != _CmWindowMode.voice || voiceId == _cmVoiceConnectionId)) {
+      if (mode != _CmWindowMode.standard) {
+        if (await windowManager.isMinimized()) await windowManager.restore();
+        if (await windowManager.getOpacity() != 1) {
+          await windowManager.setOpacity(1);
+        }
+        if (!await windowManager.isVisible()) await windowManager.show();
+      }
+      return;
+    }
+    if (mode != _CmWindowMode.standard) {
+      _cmPreviousAlwaysOnTop ??= await windowManager.isAlwaysOnTop();
+      _cmPreviousSkipTaskbar ??= await windowManager.isSkipTaskbar();
+      if (isWindows && _cmWindowMode == _CmWindowMode.standard) {
+        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+        await windowManager.setAsFrameless();
+        await windowManager.setHasShadow(false);
+        await const MethodChannel('org.rustdesk.rustdesk/host')
+            .invokeMethod<void>('setTrustedRequestFrame', true);
+      }
+      if (mode == _CmWindowMode.voice) {
+        voiceCallArrived.value = false;
+        await windowManager.setMinimumSize(nnuDockCompactSize);
+        if (_cmWindowMode != _CmWindowMode.dock) await nnuConnectedDockWindow.enter();
+        await windowManager.setSkipTaskbar(true);
+        await windowManager.setAlwaysOnTop(true);
+        await windowManager.setOpacity(1);
+        await windowManager.show();
+        final completed = await nnuConnectedDockWindow.finish(nnuVoiceCallWindowSize,
+          shape: 6,
+          reducedMotion: WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations,
+          stillCurrent: () => desktopVoiceCall?.id == voiceId && model.trustedDesktopRequest == null);
+        if (!completed) return;
+        voiceCallArrived.value = true;
+      } else if (mode == _CmWindowMode.dock) {
+        trustedEndRevealed.value = false;
+        await windowManager.setMinimumSize(nnuDockCompactSize);
+        await nnuConnectedDockWindow.enter();
+        await windowManager.setSkipTaskbar(true);
+      } else {
+        if (mode == _CmWindowMode.ended) {
+          await windowManager.setMinimumSize(Size.zero);
+          final endedId = trustedEndedClient?.id;
+          if (_cmWindowMode == _CmWindowMode.dock) {
+            final completed = await nnuConnectedDockWindow.finish(
+              nnuSessionEndedSize,
+              reducedMotion: WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations,
+              stillCurrent: () => trustedEndedClient?.id == endedId);
+            if (!completed) return;
+          } else {
+            await nnuConnectedDockWindow.centerRequest(nnuSessionEndedSize);
+          }
+          trustedEndRevealed.value = true;
+        } else {
+          trustedEndRevealed.value = false;
+          await nnuConnectedDockWindow.centerRequest(nnuTrustedRequestWindowSize);
+        }
+        if (_cmWindowMode == _CmWindowMode.dock) {
+          await windowManager.setSkipTaskbar(_cmPreviousSkipTaskbar ?? false);
+        }
+      }
+      await windowManager.setAlwaysOnTop(true);
+      await windowManager.setOpacity(1);
+      if (await windowManager.isMinimized()) await windowManager.restore();
+      await windowManager.show();
+      if (mode == _CmWindowMode.prompt ||
+          (mode == _CmWindowMode.voice && desktopVoiceCall?.incomingVoiceCall == true)) {
+        await windowManager.focus();
+      }
+    } else {
+      final voiceOnly = nnuOnlyVoiceChannels(model.clients);
+      final passwordIdle = model.approveMode == 'password' &&
+          !model.clients.any((c) => !c.disconnected);
+      final cancelled = cancelledPasswordDock;
+      if (cancelled != null) {
+        final completed = await nnuFadeCancelledPasswordDock(
+          reducedMotion: WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations,
+          stillCurrent: () => cancelledPasswordDock?.id == cancelled.id,
+          setOpacity: windowManager.setOpacity, hide: windowManager.hide);
+        if (!completed) return;
+      }
+      if (model.hideCm || voiceOnly || passwordIdle || model.clients.isEmpty) {
+        await windowManager.setOpacity(0);
+        await windowManager.hide();
+      }
+      await windowManager.setMinimumSize(Size.zero);
+      if (isWindows) {
+        await const MethodChannel('org.rustdesk.rustdesk/host')
+            .invokeMethod<void>('setTrustedRequestFrame', false);
+        await windowManager.setTitleBarStyle(
+            kUseCompatibleUiMode ? TitleBarStyle.normal : TitleBarStyle.hidden);
+      }
+      final alwaysOnTop = _cmPreviousAlwaysOnTop;
+      if (alwaysOnTop != null) await windowManager.setAlwaysOnTop(alwaysOnTop);
+      _cmPreviousAlwaysOnTop = null;
+      final skipTaskbar = _cmPreviousSkipTaskbar;
+      if (skipTaskbar != null) await windowManager.setSkipTaskbar(model.hideCm || voiceOnly || skipTaskbar);
+      _cmPreviousSkipTaskbar = null;
+      await windowManager.setSizeAlignment(
+          kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
+      if (model.hideCm || passwordIdle || model.clients.isEmpty || nnuOnlyVoiceChannels(model.clients)) await hideCmWindow();
+    }
+    _cmWindowMode = mode;
+    _cmDockConnectionId = mode == _CmWindowMode.dock ? dockId : null;
+    _cmVoiceConnectionId = mode == _CmWindowMode.voice ? voiceId : null;
+  });
+}
 
 showCmWindow({bool isStartup = false}) async {
+  final model = gFFI.serverModel;
+  if (model.approveMode == 'password' &&
+      !model.clients.any((c) => !c.disconnected) && trustedEndedClient == null) {
+    await hideCmWindow(isStartup: isStartup);
+    return;
+  }
+  if (nnuOnlyVoiceChannels(gFFI.serverModel.clients) &&
+      desktopVoiceCall == null) {
+    await hideCmWindow(isStartup: isStartup);
+    return;
+  }
   if (isStartup) {
     WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
         size: kConnectionManagerWindowSizeClosedChat, alwaysOnTop: true);
     await windowManager.waitUntilReadyToShow(windowOptions, null);
     bind.mainHideDock();
+    await windowManager.setSizeAlignment(
+        kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
+    _isCmReadyToShow = true;
+    if (gFFI.serverModel.trustedDesktopRequest != null ||
+        gFFI.serverModel.desktopConnectionDock != null || desktopVoiceCall != null) {
+      await syncTrustedCmWindow();
+      return;
+    }
     await Future.wait([
       windowManager.show(),
       windowManager.focus(),
       windowManager.setOpacity(1)
     ]);
-    // ensure initial window size to be changed
-    await windowManager.setSizeAlignment(
-        kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
-    _isCmReadyToShow = true;
   } else if (_isCmReadyToShow) {
+    if (gFFI.serverModel.trustedDesktopRequest != null ||
+        gFFI.serverModel.desktopConnectionDock != null ||
+        desktopVoiceCall != null || _cmWindowMode != _CmWindowMode.standard) {
+      await syncTrustedCmWindow();
+      return;
+    }
     if (await windowManager.getOpacity() != 1) {
-      await windowManager.setOpacity(1);
-      await windowManager.focus();
-      await windowManager.minimize(); //needed
+      await windowManager.setSkipTaskbar(false);
+      await windowManager.restore();
       await windowManager.setSizeAlignment(
           kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
+      await windowManager.setOpacity(1);
       windowOnTop(null);
     }
   }
 }
 
 hideCmWindow({bool isStartup = false}) async {
+  if (!isStartup &&
+      (gFFI.serverModel.trustedDesktopRequest != null ||
+          gFFI.serverModel.desktopConnectionDock != null ||
+          trustedEndedClient != null || desktopVoiceCall != null || cancelledPasswordDock != null)) return;
   if (isStartup) {
     WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
-        size: kConnectionManagerWindowSizeClosedChat);
-    windowManager.setOpacity(0);
+        size: kConnectionManagerWindowSizeClosedChat, skipTaskbar: true);
+    await windowManager.setOpacity(0);
     await windowManager.waitUntilReadyToShow(windowOptions, null);
     bind.mainHideDock();
-    await windowManager.minimize();
     await windowManager.hide();
     _isCmReadyToShow = true;
   } else if (_isCmReadyToShow) {
+    await windowManager.setSkipTaskbar(true);
     if (await windowManager.getOpacity() != 0) {
       await windowManager.setOpacity(0);
       bind.mainHideDock();
-      await windowManager.minimize();
-      await windowManager.hide();
     }
+    await windowManager.hide();
   }
 }
 
@@ -402,6 +615,7 @@ WindowOptions getHiddenTitleBarWindowOptions(
     {bool isMainWindow = false,
     Size? size,
     bool center = false,
+    bool skipTaskbar = false,
     bool? alwaysOnTop}) {
   var defaultTitleBarStyle = TitleBarStyle.hidden;
   // we do not hide titlebar on win7 because of the frame overflow.
@@ -412,7 +626,7 @@ WindowOptions getHiddenTitleBarWindowOptions(
     size: size,
     center: center,
     backgroundColor: (isMacOS && isMainWindow) ? null : Colors.transparent,
-    skipTaskbar: false,
+    skipTaskbar: skipTaskbar,
     titleBarStyle: defaultTitleBarStyle,
     alwaysOnTop: alwaysOnTop,
   );
@@ -497,7 +711,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           debugShowCheckedModeBanner: false,
           title: isWeb
               ? '${bind.mainGetAppNameSync()} Web Client V2 (Preview)'
-              : bind.mainGetAppNameSync(),
+              : isWindows || isLinux || isAndroid ? nnuSupportTitle : bind.mainGetAppNameSync(),
           theme: MyTheme.lightTheme,
           darkTheme: MyTheme.darkTheme,
           themeMode: MyTheme.currentThemeMode(),
@@ -577,6 +791,8 @@ _registerEventHandler() {
 
 Widget keyListenerBuilder(BuildContext context, Widget? child) {
   return RawKeyboardListener(
+    // Keep this keyboard-only wrapper from taking focus away from web inputs.
+    includeSemantics: !isWeb,
     // `skipTraversal: isWeb` is to fix "Bad state: RenderBox was not laid out: minified:aeL#c19e4"
     focusNode: FocusNode(skipTraversal: isWeb),
     child: child ?? Container(),

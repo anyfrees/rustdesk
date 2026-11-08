@@ -5,17 +5,23 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../widgets/nnu_voice_sound.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
+import 'package:flutter_hbb/common/widgets/keyboard_shortcuts/page_body.dart';
+import 'package:flutter_hbb/desktop/pages/desktop_keyboard_shortcuts_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_connection_window_option.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_management_settings.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/printer_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
+import 'package:flutter_hbb/models/shortcut_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -417,11 +423,51 @@ class _GeneralState extends State<_General> {
         _Card(title: 'Language', children: [language()]),
         if (!isWeb) hwcodec(),
         if (!isWeb) audio(context),
+        if (isWindows) _Card(title: '语音提醒', children: const [NnuVoiceSoundSetting()]),
         if (!isWeb) record(context),
         if (!isWeb) WaylandCard(),
-        other()
+        other(),
+        if (!bind.isIncomingOnly()) keyboardShortcuts(),
       ],
     ).marginOnly(bottom: _kListViewBottomMargin);
+  }
+
+  Widget keyboardShortcuts() {
+    // The bindings JSON (LocalConfig key `keyboard-shortcuts`) holds three
+    // flags + the bindings list: {enabled, pass_through, bindings}. When the
+    // master is off, the pass-through toggle and the Configure entry are
+    // hidden — both are meaningless without an active matcher.
+    return StatefulBuilder(builder: (context, setLocalState) {
+      final enabled = ShortcutModel.isEnabled();
+      return _Card(title: 'Keyboard shortcuts', children: [
+        _OptionCheckBox(
+          context,
+          'Enable keyboard shortcuts in remote session',
+          kShortcutLocalConfigKey,
+          isServer: false,
+          optGetter: ShortcutModel.isEnabled,
+          optSetter: (_, v) async {
+            await ShortcutModel.setEnabled(v);
+            setLocalState(() {});
+          },
+        ),
+        if (enabled) ...[
+          _OptionCheckBox(
+            context,
+            'Pass-through to remote',
+            kShortcutLocalConfigKey,
+            isServer: false,
+            optGetter: ShortcutModel.isPassThrough,
+            optSetter: (_, v) async {
+              await ShortcutModel.setPassThrough(v);
+              setLocalState(() {});
+            },
+            trailing: const InfoTooltipIcon(tipKey: 'shortcut-passthrough-tip'),
+          ),
+          _ShortcutsConfigureRow(),
+        ],
+      ]);
+    });
   }
 
   Widget theme() {
@@ -557,6 +603,17 @@ class _GeneralState extends State<_General> {
           'Check for software update on startup',
           kOptionEnableCheckUpdate,
           isServer: false,
+        ),
+      if (isWindows)
+        Tooltip(
+          message: '启动约 30 秒首查，之后每 5 分钟检查；延后或失败每分钟重试。无远控会话且空闲 5 分钟后安装，保留 ID、密码和设置。',
+          child: _OptionCheckBox(
+            context,
+            '自动下载并安装更新',
+            'nnu-auto-update',
+            optSetter: (key, value) async =>
+                await bind.mainSetOption(key: key, value: value ? 'Y' : 'N'),
+          ),
         ),
       if (showAutoUpdate && !isWindows)
         _OptionCheckBox(
@@ -1001,6 +1058,12 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 if (!isChangeIdDisabled())
                   _Card(title: 'ID', children: [changeId()]),
                 more(context),
+                if (isDesktop)
+                  _Card(title: '管理', children: [
+                    hide_cm(!locked),
+                    if (isWindows && bind.mainIsInstalled())
+                      NnuManagementSettings(enabled: !locked),
+                  ]),
               ]),
             ),
           ],
@@ -1102,6 +1165,13 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               message: translate("enable-trusted-devices-tip"),
               child: _OptionCheckBox(context, "Enable trusted devices",
                   kOptionEnableTrustedDevices,
+                  optSetter: (key, value) async {
+                try {
+                  await mainSetBoolOption(key, value);
+                } catch (error) {
+                  showToast(error.toString());
+                }
+              },
                   enabled: !locked, update: (v) {
                 setState(() {});
               }),
@@ -1119,7 +1189,21 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
       ).marginOnly(left: 30);
 
       return Column(
-        children: [tfa, bot, trust],
+        children: [
+          tfa,
+          bot,
+          trust,
+          if (mainGetBoolOptionSync(kOptionEnableTrustedDevices))
+            trustedDeviceExpiration(
+              enabled: !locked,
+              onChanged: () {
+                if (mounted) setState(() {});
+              },
+            ).marginOnly(
+              left: _kCheckBoxLeftMargin + 20 + _kContentHSubMargin,
+              top: _kContentHMargin,
+            ),
+        ],
       );
     }
 
@@ -1381,8 +1465,6 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             if (usePassword && !isChangePermanentPasswordDisabled())
               _SubButton('Set permanent password', setPasswordDialog,
                   permEnabled && !locked),
-            // if (usePassword)
-            //   hide_cm(!locked).marginOnly(left: _kContentHSubMargin - 6),
             if (usePassword) radios[2],
           ]);
         })));
@@ -1604,39 +1686,14 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
     return ChangeNotifierProvider.value(
         value: gFFI.serverModel,
         child: Consumer<ServerModel>(builder: (context, model, child) {
-          final enableHideCm = model.approveMode == 'password' &&
-              model.verificationMethod == kUsePermanentPassword;
-          onHideCmChanged(bool? b) {
-            if (b != null) {
-              bind.mainSetOption(
-                  key: 'allow-hide-cm', value: bool2option('allow-hide-cm', b));
-            }
-          }
-
-          return Tooltip(
-              message: enableHideCm ? "" : translate('hide_cm_tip'),
-              child: GestureDetector(
-                onTap:
-                    enableHideCm ? () => onHideCmChanged(!model.hideCm) : null,
-                child: Row(
-                  children: [
-                    Checkbox(
-                            value: model.hideCm,
-                            onChanged: enabled && enableHideCm
-                                ? onHideCmChanged
-                                : null)
-                        .marginOnly(right: 5),
-                    Expanded(
-                      child: Text(
-                        translate('Hide connection management window'),
-                        style: TextStyle(
-                            color: disabledTextColor(
-                                context, enabled && enableHideCm)),
-                      ),
-                    ),
-                  ],
-                ),
-              ));
+          final enableHideCm = model.approveMode == 'password';
+          return NnuConnectionWindowOption(
+            showWindow: !model.hideCm,
+            enabled: enabled && !isOptionFixed('allow-hide-cm'),
+            passwordOnly: enableHideCm,
+            onChanged: (show) => bind.mainSetOption(
+                key: 'allow-hide-cm', value: bool2option('allow-hide-cm', !show)),
+          );
         }));
   }
 
@@ -2657,6 +2714,8 @@ Widget _OptionCheckBox(
   bool isServer = true,
   bool Function()? optGetter,
   Future<void> Function(String, bool)? optSetter,
+  // Optional widget rendered between the label and the trailing space.
+  Widget? trailing,
 }) {
   getOpt() => optGetter != null
       ? optGetter()
@@ -2700,11 +2759,23 @@ Widget _OptionCheckBox(
             offstage: !ref.value || checkedIcon == null,
             child: checkedIcon?.marginOnly(right: 5),
           ),
-          Expanded(
+          // Without `trailing`, keep the original Expanded(Text) layout.
+          if (trailing == null)
+            Expanded(
+                child: Text(
+              translate(label),
+              style: TextStyle(color: disabledTextColor(context, enabled)),
+            ))
+          else ...[
+            Flexible(
               child: Text(
-            translate(label),
-            style: TextStyle(color: disabledTextColor(context, enabled)),
-          ))
+                translate(label),
+                style: TextStyle(color: disabledTextColor(context, enabled)),
+              ),
+            ),
+            trailing,
+            const Spacer(),
+          ],
         ],
       ),
     ).marginOnly(left: _kCheckBoxLeftMargin),
@@ -3106,6 +3177,37 @@ class _CountDownButtonState extends State<_CountDownButton> {
             },
       child: Text(
         _isButtonDisabled ? '$_countdownSeconds s' : translate(widget.text),
+      ),
+    );
+  }
+}
+
+// Tappable row that pushes the shortcut configuration page.
+class _ShortcutsConfigureRow extends StatelessWidget {
+  // ignore: unused_element
+  const _ShortcutsConfigureRow({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () {
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => const DesktopKeyboardShortcutsPage(),
+        ));
+      },
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(translate('Configure shortcuts...')),
+          ),
+          Icon(Icons.arrow_forward_ios,
+                  size: 16, color: disabledTextColor(context, true))
+              .marginOnly(right: 4),
+        ],
+      ).marginOnly(
+        left: _kCheckBoxLeftMargin,
+        top: 6,
+        bottom: 6,
       ),
     );
   }

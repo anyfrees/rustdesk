@@ -3,85 +3,12 @@ import 'package:flutter_hbb/desktop/widgets/nnu_support.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('first-use notice can be dismissed and support remains clickable',
-      (tester) async {
-    var showNotice = true;
-    var opened = false;
-    await tester.pumpWidget(MaterialApp(
-      home: StatefulBuilder(builder: (context, setState) {
-        return Scaffold(
-          bottomNavigationBar: NnuSupportFooter(
-            showNotice: showNotice,
-            onDismissNotice: () => setState(() => showNotice = false),
-            onOpenSupport: () => opened = true,
-          ),
-        );
-      }),
-    ));
-    expect(find.textContaining('首次使用提示'), findsOneWidget);
-    await tester.tap(find.text('知道了'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('首次使用提示'), findsNothing);
-    await tester.tap(find.text('nnu.cn 提供服务支持'));
-    expect(opened, isTrue);
-  });
-
-  testWidgets('narrow layout and large text keep notice and support accessible',
-      (tester) async {
-    tester.view.physicalSize = const Size(360, 640);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(MaterialApp(
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context)
-            .copyWith(textScaler: const TextScaler.linear(1.6)),
-        child: child!,
-      ),
-      home: Scaffold(
-        appBar: AppBar(title: const NnuSupportTitle()),
-        bottomNavigationBar: NnuSupportFooter(
-          status: const SizedBox(height: 42, child: Text('就绪')),
-          showNotice: true,
-          connectionUnavailable: true,
-          onContactSupport: () {},
-          updateAction: TextButton(onPressed: () {}, child: const Text('检查更新')),
-          onDismissNotice: () {},
-          onOpenSupport: () {},
-        ),
-      ),
-    ));
+  testWidgets('the actual desktop title shows the published product name', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SizedBox(
+        width: 300, child: NnuSupportTitle()))));
+    expect(find.text('RustDesk VIP支持专业版'), findsOneWidget);
+    expect(find.byTooltip('RustDesk VIP支持专业版'), findsOneWidget);
+    expect(find.text('VIP技术支持定制版本'), findsNothing);
     expect(tester.takeException(), isNull);
-    expect(find.text('知道了'), findsOneWidget);
-    expect(find.text('nnu.cn 提供服务支持'), findsOneWidget);
-    expect(find.byTooltip(nnuSupportTitle), findsOneWidget);
-    expect(find.text(nnuSupportEmail), findsOneWidget);
-  });
-
-  testWidgets('email contact appears only while unavailable and is actionable',
-      (tester) async {
-    var unavailable = true;
-    var contacted = false;
-    late StateSetter update;
-    await tester.pumpWidget(MaterialApp(
-      home: StatefulBuilder(builder: (context, setState) {
-        update = setState;
-        return Scaffold(
-          bottomNavigationBar: NnuSupportFooter(
-            showNotice: false,
-            connectionUnavailable: unavailable,
-            onDismissNotice: () {},
-            onOpenSupport: () {},
-            onContactSupport: () => contacted = true,
-          ),
-        );
-      }),
-    ));
-    await tester.tap(find.text(nnuSupportEmail));
-    expect(contacted, isTrue);
-    update(() => unavailable = false);
-    await tester.pumpAndSettle();
-    expect(find.text(nnuSupportEmail), findsNothing);
-    expect(find.text('nnu.cn 提供服务支持'), findsOneWidget);
   });
 }

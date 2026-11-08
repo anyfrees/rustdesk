@@ -1,0 +1,51 @@
+html[nnu-mode="1"],html[nnu-mode="2"],html[nnu-mode="3"],html[nnu-mode="4"] {
+    padding:0; margin:0; border:none; background:transparent;
+}
+html[nnu-mode="1"] header,html[nnu-mode="2"] header,html[nnu-mode="3"] header,html[nnu-mode="4"] header {display:none;}
+html[nnu-mode="1"] body,html[nnu-mode="2"] body,html[nnu-mode="3"] body,html[nnu-mode="4"] body {
+    padding:0; margin:0; border:none; background:transparent; overflow:hidden;
+}
+.nnu-root {size:*; position:relative; color:#1e344b; font-family:DouyinSans,"Microsoft YaHei UI";font-size:13dip;}
+.nnu-panel {position:absolute;left:16dip;right:16dip;top:16dip;bottom:16dip;padding:22dip;border-radius:24dip;border:1dip solid #f9fcff;background:linear-gradient(135deg,#f9fcff,#e2edf6);overflow-x:hidden;overflow-y:auto;}
+html[nnu-glass="true"] .nnu-panel {background:linear-gradient(135deg,rgba(249,252,255,.93),rgba(226,237,246,.88));}
+.nnu-person {flow:horizontal; border-spacing:12dip;}
+.nnu-photo {size:50dip;border-radius:50%;border:2dip solid #ffffff;background-color:#d9e6f2;background-size:cover;background-position:center;text-align:center;vertical-align:middle;font-size:22dip;line-height:46dip;}
+.nnu-person-text {width:*;}
+.nnu-name-line {flow:horizontal-wrap;vertical-align:middle;border-spacing:7dip;}
+.nnu-name {font-size:17dip;line-height:25dip;vertical-align:middle;white-space:nowrap;text-overflow:ellipsis;}
+.nnu-cert {flow:horizontal;vertical-align:middle;display:inline-block;padding:3dip 7dip;border-radius:18dip;border:1dip solid #d4b678;background:linear-gradient(125deg,#49463e,#292b2b);color:#ead3a0;font-size:12dip;line-height:17dip;white-space:nowrap;}
+.nnu-verified {display:inline-block;margin-right:4dip;size:13dip;vertical-align:middle;color:#3db5ff;}
+.nnu-verified.black_gold {color:#ffc25c;}.nnu-verified.red {color:#ff5e73;}.nnu-verified.yellow {color:#ffdd3d;}
+.nnu-verified svg {size:13dip;}
+.nnu-description {margin-top:4dip;font-size:13dip;line-height:20dip;color:#5b7083;max-height:62dip;overflow-y:auto;}
+.nnu-request {border-top:1dip solid #cfdee9;margin-top:20dip;padding-top:20dip;}
+.nnu-request h2 {margin:0 0 8dip;font-family:DouyinSans;font-size:22dip;line-height:30dip;font-weight:normal;}
+.nnu-permission {flow:horizontal;vertical-align:middle;color:#5b7083;font-size:12dip;line-height:20dip;}
+.nnu-permission >span:last-child {width:*;}
+.nnu-lock {size:15dip;margin:* 7dip * 0;}.nnu-lock svg {size:15dip;fill:currentColor;}
+.nnu-buttons {flow:horizontal;border-spacing:10dip;margin-top:22dip;}
+.nnu-root button {appearance:none;cursor:pointer;font-family:DouyinSans,"Microsoft YaHei UI";font-size:13dip;line-height:20dip;min-height:42dip;border-radius:11dip;border:1dip solid #cdd9e4;background:#f7f9fb;color:#4e6172;}
+.nnu-root button:disabled {cursor:default;opacity:.65;}
+.nnu-root button:hover {filter:brightness(1.06);}.nnu-root button:active {filter:brightness(.95);}
+.nnu-root button:focus {outline:2dip solid #7eb9ed;outline-offset:2dip;}
+.nnu-buttons button {width:*;}
+.nnu-buttons #nnu-accept {background:linear-gradient(#3068bd,#245bb2);border-color:#245bb2;color:white;}
+.nnu-ripple {position:absolute;left:16dip;right:16dip;top:16dip;bottom:16dip;border:1.3dip solid;border-top-color:#58c6d0;border-right-color:#dfc895;border-bottom-color:#68b7d0;border-left-color:#5095ed;border-radius:24dip;opacity:0;}
+.nnu-green-wave {position:absolute;left:9dip;top:9dip;width:68dip;height:68dip;border:1.4dip solid #37bb7e;border-radius:50%;opacity:.4;}
+.nnu-root #nnu-bubble {position:absolute;left:16dip;top:16dip;size:54dip;padding:0;min-height:0;border:none;border-radius:50%;background:transparent;}
+.nnu-root #nnu-bubble .nnu-photo {size:54dip;}
+.nnu-root #nnu-bubble:hover {background:transparent;filter:none;}
+.nnu-session-top {flow:horizontal;vertical-align:middle;margin-top:14dip;}
+.nnu-id {font-size:12dip;line-height:20dip;color:#5b7083;}
+.nnu-status {flow:horizontal;border-spacing:6dip;vertical-align:middle;line-height:23dip;font-size:13dip;}
+.nnu-status #time {font-size:12dip;}
+.nnu-dot {display:inline-block;size:7dip;border-radius:50%;background:#279866;margin:* 0;}
+.nnu-tools {flow:horizontal;margin:* 0 * *;border-spacing:4dip;}
+.nnu-tools button {size:28dip;min-height:28dip;padding:4dip;background:transparent;border:1dip solid #cadbe8;border-radius:8dip;}
+.nnu-tools svg {size:18dip;fill:#315274;}
+.nnu-intro-label {margin-top:16dip;padding-top:12dip;border-top:1dip solid #cfdee9;font-size:12dip;color:#5b7083;}
+.nnu-notes {margin-top:5dip;line-height:21dip;max-height:74dip;overflow-y:auto;}
+.nnu-root #nnu-disconnect {width:*;margin-top:17dip;color:#ad3548;background:#f8f0f3;border-color:#e5cdd3;}
+.nnu-chat {height:116dip;margin-top:10dip;overflow-y:auto;}
+html.darktheme .nnu-panel {background:linear-gradient(135deg,#2c3e4d,#233442);border-color:#445965;color:#e5eef7;}
+html.darktheme .nnu-description,html.darktheme .nnu-permission,html.darktheme .nnu-id,html.darktheme .nnu-intro-label {color:#a6bacb;}

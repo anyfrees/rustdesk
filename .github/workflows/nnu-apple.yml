@@ -1,0 +1,146 @@
+name: NNU Apple Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Apple platform to build
+        type: choice
+        options: [all, macos, ios]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nnu-apple-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: '3'
+  RUST_VERSION: '1.88.0'
+  VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+  COCOAPODS_DISABLE_STATS: 'true'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Validate source and select platforms
+        id: matrix
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.platform }}
+        run: python3 res/nnu/apple-ci.py matrix
+
+  build:
+    name: ${{ matrix.platform }} / ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
+      VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.host_triplet }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_minimum }}
+      IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install build tools
+        shell: bash
+        run: |
+          brew install llvm yasm gnu-sed
+          echo "$(brew --prefix gnu-sed)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+          curl --fail --location --retry 3 https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip -o "$RUNNER_TEMP/nasm.zip"
+          unzip -q "$RUNNER_TEMP/nasm.zip" -d "$RUNNER_TEMP/nasm"
+          sudo install -m 755 "$RUNNER_TEMP/nasm/nasm-2.16.03/nasm" /usr/local/bin/nasm
+          nasm --version
+          xcodebuild -version
+      - name: Install Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: ${{ matrix.flutter }}
+          channel: stable
+          cache: true
+      - name: Prepare Apple configuration
+        env:
+          APPLE_PLATFORM: ${{ matrix.platform }}
+          APPLE_ARCH: ${{ matrix.arch }}
+        run: |
+          python3 res/nnu/apple-ci.py configure
+          if [[ "${{ matrix.flutter }}" == 3.44.* ]]; then
+            flutter config --no-enable-swift-package-manager
+            bash .github/patches/apply_flutter_3.44_source_patches.sh
+          fi
+          cd flutter
+          flutter pub get
+          if [[ "${{ matrix.flutter }}" == 3.44.* ]]; then
+            dart run build_runner build --delete-conflicting-outputs
+          fi
+      - name: Test Flutter code
+        working-directory: flutter
+        run: flutter test --concurrency=2 --timeout=120s
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          prefix-key: nnu-apple-${{ matrix.target }}
+      - name: Cache native dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ${{ runner.temp }}/vcpkg/installed
+            ${{ runner.temp }}/vcpkg/downloads
+          key: nnu-apple-vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+      - name: Install native dependencies
+        shell: bash
+        run: |
+          VCPKG_ROOT="$RUNNER_TEMP/vcpkg"
+          mkdir -p "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" init
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch --depth 1 origin "$VCPKG_COMMIT_ID"
+          git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
+          "$VCPKG_ROOT/vcpkg" install --triplet "$VCPKG_DEFAULT_TRIPLET" --host-triplet "$VCPKG_DEFAULT_HOST_TRIPLET" --x-install-root="$VCPKG_ROOT/installed"
+      - name: Build macOS app
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          python3 build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.extra_args }}
+          python3 res/nnu/apple-ci.py package-macos
+      - name: Build iOS unsigned IPA
+        if: matrix.platform == 'ios'
+        shell: bash
+        run: |
+          cargo build --locked --release --target aarch64-apple-ios --features flutter,hwcodec --lib
+          cd flutter
+          flutter build ios --release --no-codesign
+          cd ..
+          python3 res/nnu/apple-ci.py package-ios
+      - name: Upload Apple packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: NNU-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_number }}
+          path: |
+            dist/apple/*.dmg
+            dist/apple/*.ipa
+            dist/apple/*.zip
+            dist/apple/*.json
+            dist/apple/*.txt
+          if-no-files-found: error
+          retention-days: 30

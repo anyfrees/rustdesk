@@ -1,0 +1,33 @@
+services:
+  admin:
+    build: .
+    image: nnu-rustdesk-admin:1
+    container_name: nnu-rustdesk-admin
+    restart: unless-stopped
+    ports: ["127.0.0.1:32171:8080"]
+    volumes:
+      - ./state:/state
+      - ./credentials.json:/run/credentials.json:ro
+      - ../nnu-rustdesk-updates/public:/public
+      - /opt/1panel/apps/openresty/openresty/www/sites/rd.0vk.com/log:/logs:ro
+    environment:
+      NNU_STATE: /state
+      NNU_PUBLIC: /public
+      NNU_CREDENTIALS: /run/credentials.json
+      NNU_ORIGIN: https://rd.nnu.cn
+      NNU_HOST_ALIASES: rd.0vk.com,rdupdata.0vk.com
+      NNU_LOG: /logs/access.log
+    read_only: true
+    tmpfs: ["/tmp:size=32m,uid=10001,gid=10001"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 384m
+    pids_limit: 64
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}

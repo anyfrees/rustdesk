@@ -76,6 +76,7 @@ message LoginRequest {
     PortForward port_forward = 8;
     ViewCamera view_camera = 15;
     Terminal terminal = 16;
+    NnuVoiceCall nnu_voice_call = 92;
   }
   bool video_ack_required = 9;
   uint64 session_id = 10;
@@ -84,6 +85,11 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
+  string nnu_official_support_proof = 90;
+  // Optional identity attached to ordinary authentication.
+  string nnu_verified_identity_proof = 91;
+  bytes trusted_device_v2_token = 18;
+  bool trusted_device_v2_supported = 19;
 }
 
 message Terminal {
@@ -93,6 +99,7 @@ message Terminal {
 message Auth2FA {
   string code = 1;
   bytes hwid = 2;
+  bool trust_this_device = 3;
 }
 
 message ChatMessage { string text = 1; }
@@ -147,6 +154,9 @@ message LoginResponse {
     PeerInfo peer_info = 2;
   }
   bool enable_trusted_devices = 3;
+  bool nnu_official_support_verified = 90;
+  bool trusted_device_v2_supported = 4;
+  bytes trusted_device_v2_token = 5;
 }
 
 message TouchScaleUpdate {
@@ -325,9 +335,14 @@ message CursorPosition {
   sint32 y = 2;
 }
 
+message NnuVoiceCall {}
+
 message Hash {
   string salt = 1;
   string challenge = 2;
+  string nnu_official_support_challenge = 90;
+  bool nnu_verified_identity_supported = 91;
+  bool nnu_voice_call_supported = 92;
 }
 
 enum ClipboardFormat {
@@ -1030,5 +1045,7 @@ message Message {
     TerminalAction terminal_action = 31;
     TerminalResponse terminal_response = 32;
     PortForwardChannel port_forward_channel = 33;
+    // Auto Login: the peer types the password only if it is at its logon or lock screen.
+    OSLogin os_login = 34;
   }
 }

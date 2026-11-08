@@ -22,6 +22,7 @@ import 'package:bot_toast/bot_toast.dart';
 
 import '../../common/widgets/dialog.dart';
 import '../../models/platform_model.dart';
+import '../widgets/nnu_connection_tab.dart';
 
 class _MenuTheme {
   static const Color blueColor = MyTheme.button;
@@ -97,6 +98,8 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           display: display,
           displays: displays?.cast<int>(),
           password: params['password'],
+          connToken: params['connToken'],
+          loginMethod: params['loginMethod'] ?? '',
           toolbarState: ToolbarState(),
           tabController: tabController,
           switchUuid: params['switch_uuid'],
@@ -144,7 +147,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         ),
         selectedBorderColor: MyTheme.accent,
         pageViewBuilder: (pageView) => pageView,
-        labelGetter: DesktopTab.tablabelGetter,
+        labelGetter: (id) => id.obs,
         tabBuilder: (key, icon, label, themeConf) => Obx(() {
           final connectionType = ConnectionTypeState.find(key);
           if (!connectionType.isValid()) {
@@ -175,22 +178,35 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
               msgFingerprint += fingerprint;
             }
 
-            final tab = Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                icon,
-                Tooltip(
-                  message: '$msgConn\n$msgFingerprint',
-                  child: SvgPicture.asset(
-                    'assets/${connectionType.secure.value}${connectionType.direct.value}.svg',
-                    width: themeConf.iconSize,
-                    height: themeConf.iconSize,
-                  ).paddingOnly(right: 5),
-                ),
-                label,
-                unreadMessageCountBuilder(UnreadChatCountState.find(key))
-                    .marginOnly(left: 4),
+            final remotePage = tabController.widget(key) as RemotePage;
+            final tab = NnuConnectionTab(
+              remoteId: key,
+              deviceName: DesktopTab.tablabelGetter(key).value,
+              direct: direct,
+              routeLabel: nnuConnectionRouteLabel(
+                  translate(direct ? 'Direct Connection' : 'Relay Connection')),
+              delayLabel: translate('nnu_connection_latency'),
+              networkLabel: translate('nnu_connection_network_status'),
+              unmeasuredLabel: translate('nnu_connection_unmeasured'),
+              qualityLabels: [
+                translate('nnu_connection_exceptional'),
+                translate('nnu_connection_excellent'),
+                translate('nnu_connection_good'),
+                translate('nnu_connection_fair'),
+                translate('nnu_connection_poor'),
+                translate('nnu_connection_very_poor'),
               ],
+              connectionDetails: '$msgConn\n$msgFingerprint',
+              quality: remotePage.ffi.qualityMonitorModel,
+              leading: icon,
+              securityIcon: SvgPicture.asset(
+                'assets/${connectionType.secure.value}${connectionType.direct.value}.svg',
+                width: themeConf.iconSize,
+                height: themeConf.iconSize,
+              ).paddingOnly(right: 5),
+              trailing:
+                  unreadMessageCountBuilder(UnreadChatCountState.find(key))
+                      .marginOnly(left: 4),
             );
 
             return Listener(
@@ -470,6 +486,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           display: display,
           displays: displays?.cast<int>(),
           password: args['password'],
+          loginMethod: args['loginMethod'] ?? '',
           toolbarState: ToolbarState(),
           tabController: tabController,
           switchUuid: switchUuid,

@@ -23,7 +23,7 @@ use hbb_common::{
     socket_client::{self, connect_tcp, is_ipv4, new_direct_udp_for, new_udp_for},
     tokio::{
         self, select,
-        sync::{mpsc, Mutex},
+        sync::{mpsc, Mutex, Notify},
         time::interval,
     },
     udp::FramedSocket,
@@ -46,7 +46,37 @@ fn connection_meta(
     ConnectionMeta {
         control_permissions,
         controlled_context,
+        ..Default::default()
     }
+}
+
+// Relays this peer put in its punch replies, from its `relay-server` option or a rendezvous
+// server. A genuine RequestRelay echoes one back; this bounds where a request can send this peer,
+// it does not authenticate the request.
+static REPORTED_RELAYS: std::sync::Mutex<VecDeque<(String, Instant)>> =
+    std::sync::Mutex::new(VecDeque::new());
+const MAX_REPORTED_RELAYS: usize = 32;
+// Far longer than a controller's direct attempts before it asks for the relay, yet a relay
+// dropped from the configuration stops being accepted.
+const REPORTED_RELAY_TTL: Duration = Duration::from_secs(600);
+
+fn remember_reported_relay(relay_server: &str, now: Instant) {
+    let relay_server = check_port(relay_server, config::RELAY_PORT);
+    let mut relays = REPORTED_RELAYS.lock().unwrap();
+    relays.retain(|(r, at)| {
+        *r != relay_server && now.saturating_duration_since(*at) < REPORTED_RELAY_TTL
+    });
+    if relays.len() >= MAX_REPORTED_RELAYS {
+        relays.pop_front();
+    }
+    relays.push_back((relay_server, now));
+}
+
+fn is_reported_relay(relay_server: &str, now: Instant) -> bool {
+    let relay_server = check_port(relay_server, config::RELAY_PORT);
+    REPORTED_RELAYS.lock().unwrap().iter().any(|(r, at)| {
+        *r == relay_server && now.saturating_duration_since(*at) < REPORTED_RELAY_TTL
+    })
 }
 
 lazy_static::lazy_static! {
@@ -208,6 +238,7 @@ impl IceRoute {
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static MANUAL_RESTARTED: AtomicBool = AtomicBool::new(false);
+static MANUAL_RESTART_NOTIFY: Notify = Notify::const_new();
 static SENT_REGISTER_PK: AtomicBool = AtomicBool::new(false);
 pub(crate) static NEEDS_DEPLOY: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "android")]
@@ -256,23 +287,38 @@ pub(crate) fn reset_needs_deploy_notification() {
     NOTIFIED_NEEDS_DEPLOY.store(false, Ordering::SeqCst);
 }
 
+async fn wait_for_retry(delay: f32, restarted: tokio::sync::futures::Notified<'_>) {
+    select! {
+        _ = sleep(delay) => {}
+        _ = restarted => {}
+    }
+}
+
 #[derive(Clone)]
 pub struct RendezvousMediator {
     addr: TargetAddr<'static>,
     host: String,
     host_prefix: String,
     keep_alive: i32,
+    signal_challenge: Vec<u8>,
 }
 
 impl RendezvousMediator {
     pub fn restart() {
         SHOULD_EXIT.store(true, Ordering::SeqCst);
         MANUAL_RESTARTED.store(true, Ordering::SeqCst);
+        MANUAL_RESTART_NOTIFY.notify_waiters();
         log::info!("server restart");
     }
 
     pub async fn start_all() {
         crate::test_nat_type();
+        #[cfg(windows)]
+        if crate::nnu_update::is_nnu_server()
+            && (!crate::platform::is_installed() || crate::is_server())
+        {
+            crate::updater::start_auto_update();
+        }
         if config::is_outgoing_only() {
             loop {
                 sleep(1.).await;
@@ -339,10 +385,12 @@ impl RendezvousMediator {
             }
             Config::reset_online();
             let timeout = *timeout.read().unwrap();
+            // Subscribe before checking the flag so a restart cannot miss the wait.
+            let restarted = MANUAL_RESTART_NOTIFY.notified();
             if !MANUAL_RESTARTED.load(Ordering::SeqCst) {
                 let elapsed = conn_start_time.elapsed().as_millis() as u64;
                 if elapsed < timeout {
-                    sleep(((timeout - elapsed) / 1000) as _).await;
+                    wait_for_retry(((timeout - elapsed) / 1000) as _, restarted).await;
                 }
             } else {
                 // https://github.com/rustdesk/rustdesk/issues/12233
@@ -373,6 +421,7 @@ impl RendezvousMediator {
             host: host.clone(),
             host_prefix: Self::get_host_prefix(&host),
             keep_alive: crate::DEFAULT_KEEP_ALIVE,
+            signal_challenge: Vec::new(),
         };
 
         let mut timer = crate::rustdesk_interval(interval(crate::TIMER_OUT));
@@ -457,6 +506,9 @@ impl RendezvousMediator {
                     if timeout || (last_register_sent.is_none() && expired) {
                         if timeout {
                             fails += 1;
+                            if fails >= MAX_FAILS1 && crate::nnu_network::is_nnu_host(&host) {
+                                return Self::start_tcp(server, host).await;
+                            }
                             if fails >= MAX_FAILS2 {
                                 Config::update_latency(&host, -1);
                                 old_latency = 0;
@@ -492,7 +544,14 @@ impl RendezvousMediator {
         server: &ServerPtr,
         update_latency: &mut impl FnMut(),
     ) -> ResultType<()> {
-        match msg {
+        match crate::nnu_network::open_signal(msg)? {
+            Some(rendezvous_message::Union::SignalChallenge(challenge)) => {
+                let Sink::Stream(stream) = &sink else { return Ok(()); };
+                if !stream.is_secured() && !crate::nnu_network::tls_fallback(stream) { return Ok(()); }
+                if challenge.nonce.len() != 32 { bail!("Invalid registration challenge"); }
+                self.signal_challenge = challenge.nonce.to_vec();
+                self.register_peer(sink).await?;
+            }
             Some(rendezvous_message::Union::RegisterPeerResponse(rpr)) => {
                 update_latency();
                 if rpr.request_pk {
@@ -581,17 +640,6 @@ impl RendezvousMediator {
                     _ => {}
                 }
             }
-            Some(rendezvous_message::Union::ConfigureUpdate(cu)) => {
-                let v0 = Config::get_rendezvous_servers();
-                Config::set_option(
-                    "rendezvous-servers".to_owned(),
-                    cu.rendezvous_servers.join(","),
-                );
-                Config::set_serial(cu.serial);
-                if v0 != Config::get_rendezvous_servers() {
-                    Self::restart();
-                }
-            }
             _ => {}
         }
         Ok(())
@@ -600,14 +648,18 @@ impl RendezvousMediator {
     pub async fn start_tcp(server: ServerPtr, host: String) -> ResultType<()> {
         let host = check_port(&host, RENDEZVOUS_PORT);
         log::info!("start tcp: {}", hbb_common::websocket::check_ws(&host));
-        let mut conn = connect_tcp(host.clone(), CONNECT_TIMEOUT).await?;
+        let mut conn = crate::nnu_network::connect(&host, CONNECT_TIMEOUT).await?;
         let key = crate::get_key(true).await;
         crate::secure_tcp(&mut conn, &key).await?;
+        let transport_host = if crate::nnu_network::tls_fallback(&conn) {
+            crate::nnu_network::fallback_url(&host).unwrap_or_else(|| host.clone())
+        } else { host.clone() };
         let mut rz = Self {
             addr: conn.local_addr().into_target_addr()?,
-            host: host.clone(),
+            host: transport_host,
             host_prefix: Self::get_host_prefix(&host),
             keep_alive: crate::DEFAULT_KEEP_ALIVE,
+            signal_challenge: Vec::new(),
         };
         let mut timer = crate::rustdesk_interval(interval(crate::TIMER_OUT));
         let mut last_register_sent: Option<Instant> = None;
@@ -669,7 +721,11 @@ impl RendezvousMediator {
         }
     }
 
-    async fn handle_request_relay(&self, rr: RequestRelay, server: ServerPtr) -> ResultType<()> {
+    async fn handle_request_relay(&self, mut rr: RequestRelay, server: ServerPtr) -> ResultType<()> {
+        if let Err(err) = self.check_relay_request(&rr, Instant::now()) {
+            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, warn, "Ignored relay request: {}", err);
+            return Ok(());
+        }
         let addr = AddrMangle::decode(&rr.socket_addr);
         let last = *LAST_RELAY_MSG.lock().await;
         *LAST_RELAY_MSG.lock().await = (addr, Instant::now());
@@ -677,10 +733,25 @@ impl RendezvousMediator {
         if last.0 == addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
-        let meta = connection_meta(
+        let mut nnu_relay_identity = None;
+        let mut initiate = false;
+        if rr.uuid.starts_with(crate::nnu_official_support::stock::REFERENCE)
+            && crate::nnu_official_support::stock::fetch(&mut rr, &self.host).await.is_none()
+        {
+            return Ok(());
+        }
+        if rr.uuid.starts_with(crate::nnu_official_support::stock::PREFIX) {
+            let Some((identity, requested_initiate)) = crate::nnu_official_support::stock::open(&mut rr) else {
+                return Ok(());
+            };
+            nnu_relay_identity = Some(identity);
+            initiate = requested_initiate;
+        }
+        let mut meta = connection_meta(
             rr.control_permissions.into_option(),
             rr.controlled_context.into_option(),
         );
+        meta.nnu_relay_identity = nnu_relay_identity;
 
         self.create_relay(
             rr.socket_addr.into(),
@@ -688,7 +759,7 @@ impl RendezvousMediator {
             rr.uuid,
             server,
             rr.secure,
-            false,
+            initiate,
             Default::default(),
             String::new(),
             meta,
@@ -717,7 +788,7 @@ impl RendezvousMediator {
             secure,
         );
 
-        let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+        let mut socket = crate::nnu_network::connect(&self.host, CONNECT_TIMEOUT).await?;
         // A relay response carrying an answer carries this machine's ICE candidates with it, so
         // that half goes out only on an encrypted channel. A server that does not complete the
         // exchange loses the answer, not the relay: the response goes without it, on a fresh
@@ -729,7 +800,7 @@ impl RendezvousMediator {
             if let Err(err) = crate::secure_tcp_required(&mut socket, &key).await {
                 log::warn!("relaying without the WebRTC answer, it cannot be encrypted: {err}");
                 webrtc_sdp_answer = String::new();
-                socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+                socket = crate::nnu_network::connect(&self.host, CONNECT_TIMEOUT).await?;
             }
         }
 
@@ -747,6 +818,7 @@ impl RendezvousMediator {
             rr.set_id(Config::get_id());
         }
         msg_out.set_relay_response(rr);
+        if msg_out.relay_response().webrtc_sdp_answer.len() > 0 { crate::nnu_network::sign_signal(&mut msg_out, &[])?; }
         socket.send(&msg_out).await?;
         crate::create_relay_connection(
             server,
@@ -771,7 +843,8 @@ impl RendezvousMediator {
         }
         let peer_addr_v6 = hbb_common::AddrMangle::decode(&fla.socket_addr_v6);
         let relay_server = self.get_relay_server(fla.relay_server.clone());
-        let relay = use_ws() || Config::is_proxy();
+        remember_reported_relay(&relay_server, Instant::now());
+        let relay = use_ws() || self.host.starts_with("wss://") || Config::is_proxy();
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(
             fla.control_permissions.clone().into_option(),
@@ -949,11 +1022,15 @@ impl RendezvousMediator {
                         candidate,
                         ..Default::default()
                     });
+                    if let Err(error) = crate::nnu_network::sign_signal(&mut msg, &[]) {
+                        log::warn!("Cannot sign ICE signalling: {error}");
+                        break;
+                    }
                     // One reconnect attempt per candidate: the first send after an hbbs
                     // restart or an idle-killed connection fails on the stale stream.
                     for _ in 0..2 {
                         if conn.is_none() {
-                            match connect_tcp(&*host, CONNECT_TIMEOUT).await {
+                            match crate::nnu_network::connect(&host, CONNECT_TIMEOUT).await {
                                 Ok(mut s) => {
                                     // Candidates are every interface address of this machine:
                                     // sent only on a channel that is actually encrypted, else
@@ -1059,7 +1136,7 @@ impl RendezvousMediator {
             return Ok(());
         }
         let peer_addr_v6 = hbb_common::AddrMangle::decode(&ph.socket_addr_v6);
-        let local_proxy = use_ws() || Config::is_proxy();
+        let local_proxy = use_ws() || self.host.starts_with("wss://") || Config::is_proxy();
         let relay = local_proxy || ph.force_relay;
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(
@@ -1119,6 +1196,7 @@ impl RendezvousMediator {
             .await;
         }
         let relay_server = self.get_relay_server(ph.relay_server);
+        remember_reported_relay(&relay_server, Instant::now());
         // for ensure, websocket go relay directly
         // A symmetric NAT relays the legacy transports but deliberately not WebRTC: the answer
         // built above rides along on the relay request, and ICE probes the candidate pairs rather
@@ -1166,7 +1244,8 @@ impl RendezvousMediator {
             // is made — the controller keeps its request socket for trickled ICE.
             let mut msg_out = Message::new();
             msg_out.set_punch_hole_sent(msg_punch);
-            let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+            crate::nnu_network::sign_signal(&mut msg_out, &[])?;
+            let mut socket = crate::nnu_network::connect(&self.host, CONNECT_TIMEOUT).await?;
             // The answer goes out only on a channel that is actually encrypted; otherwise this
             // WebRTC attempt is abandoned and the controller falls back to its other transports.
             crate::secure_tcp_required(&mut socket, &crate::get_key(true).await).await?;
@@ -1279,6 +1358,14 @@ impl RendezvousMediator {
             no_register_device: Config::no_register_device(),
             ..Default::default()
         });
+        if let Some(rendezvous_message::Union::RegisterPk(request)) = msg_out.union.as_mut() {
+            if cfg!(all(any(feature = "flutter", target_os = "windows"), not(any(target_os = "android", target_os = "ios"))))
+                && crate::nnu_official_support::keys().next().is_some()
+            {
+                request.special_fields.mut_unknown_fields().add_varint(91, 2);
+            }
+        }
+        crate::nnu_network::prepare_registration(&mut msg_out, &self.signal_challenge)?;
         socket.send(&msg_out).await?;
         SENT_REGISTER_PK.store(true, Ordering::SeqCst);
         Ok(())
@@ -1325,6 +1412,14 @@ impl RendezvousMediator {
             serial,
             ..Default::default()
         });
+        if let Some(rendezvous_message::Union::RegisterPeer(request)) = msg_out.union.as_mut() {
+            if cfg!(all(any(feature = "flutter", target_os = "windows"), not(any(target_os = "android", target_os = "ios"))))
+                && crate::nnu_official_support::keys().next().is_some()
+            {
+                request.special_fields.mut_unknown_fields().add_varint(91, 2);
+            }
+        }
+        crate::nnu_network::prepare_registration(&mut msg_out, &self.signal_challenge)?;
         socket.send(&msg_out).await?;
         Ok(())
     }
@@ -1338,6 +1433,20 @@ impl RendezvousMediator {
             relay_server = crate::increase_port(&self.host, 1);
         }
         relay_server
+    }
+
+    fn check_relay_request(&self, rr: &RequestRelay, now: Instant) -> ResultType<()> {
+        crate::common::check_relay_uuid(&rr.uuid)?;
+        if !is_reported_relay(&rr.relay_server, now)
+            && check_port(&rr.relay_server, config::RELAY_PORT)
+                != check_port(self.get_relay_server(String::new()), config::RELAY_PORT)
+        {
+            bail!(
+                "relay server {:?} was not offered by this peer",
+                rr.relay_server
+            );
+        }
+        Ok(())
     }
 }
 
@@ -1627,7 +1736,7 @@ async fn punch_tcp_until_connected(
 }
 
 /// The repeats of `punch_tcp_until_connected`, over any punch rather than `connect_tcp_local`
-/// alone, so that a test can run the schedule against a paused clock - which no socket can be.
+/// alone.
 async fn punch_until<T, F, Fut>(
     until: tokio::time::Instant,
     peer_addr: SocketAddr,
@@ -1730,18 +1839,31 @@ impl Drop for CheckIfResendPk {
 #[cfg(test)]
 mod tests {
     use super::{
-        connection_meta, mpsc, socket_client, tokio, udp_nat_listen, AnswererSlot, Arc, IceRoute,
-        IntoTargetAddr, Ordering, PunchHoleSent, RendezvousMediator, RendezvousMessage,
-        ICE_DEDUP_WINDOW, MAX_PENDING_REMOTE_ICE, MAX_WEBRTC_ANSWERERS, TCP_PUNCHES, UDP_PUNCHES,
+        connection_meta, mpsc, tokio, wait_for_retry, AnswererSlot, Duration, IceRoute,
+        Instant, IntoTargetAddr, Ordering, PunchHoleSent, RendezvousMediator, RendezvousMessage,
+        CONNECT_TIMEOUT, MANUAL_RESTARTED, MANUAL_RESTART_NOTIFY, MAX_WEBRTC_ANSWERERS,
+        SHOULD_EXIT, TCP_PUNCHES, UDP_PUNCHES,
     };
-    use hbb_common::{protobuf::Message as _, tcp::new_listener};
-    use std::net::SocketAddr;
+    use hbb_common::protobuf::Message as _;
 
-    // The pools are statics and the tests run in parallel: the ones that count them take turns.
-    static POOLS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[tokio::test]
+    async fn manual_restart_interrupts_retry_wait() {
+        const WAKE_TIMEOUT: Duration = Duration::from_secs(1);
+        let waiting = wait_for_retry(
+            (CONNECT_TIMEOUT / 1000) as _,
+            MANUAL_RESTART_NOTIFY.notified(),
+        );
+        tokio::pin!(waiting);
+        assert!(hbb_common::futures::poll!(waiting.as_mut()).is_pending());
 
-    fn pools() -> std::sync::MutexGuard<'static, ()> {
-        POOLS.lock().unwrap_or_else(|e| e.into_inner())
+        RendezvousMediator::restart();
+        let result = tokio::time::timeout(WAKE_TIMEOUT, waiting).await;
+        MANUAL_RESTARTED.store(false, Ordering::SeqCst);
+        SHOULD_EXIT.store(false, Ordering::SeqCst);
+        assert!(
+            result.is_ok(),
+            "restart must interrupt the pending retry delay"
+        );
     }
 
     // The places are the bound and they come back on drop: a punch past the limit is declined
@@ -1749,7 +1871,6 @@ mod tests {
     // place has actually been given back.
     #[test]
     fn test_punch_slots_cap_and_release() {
-        let _pools = pools();
         for pool in [&UDP_PUNCHES, &TCP_PUNCHES] {
             let held: Vec<_> = (0..pool.max)
                 .map(|_| pool.take().expect("a place up to the limit"))
@@ -1758,34 +1879,6 @@ mod tests {
             drop(held);
             assert!(pool.take().is_some(), "a place comes back on drop");
         }
-    }
-
-    // Neither transport pays for the other's crowd: a full UDP pool leaves the TCP places alone.
-    #[test]
-    fn a_full_udp_pool_leaves_the_tcp_places_alone() {
-        let _pools = pools();
-        let held: Vec<_> = (0..UDP_PUNCHES.max)
-            .map(|_| UDP_PUNCHES.take().expect("a place up to the limit"))
-            .collect();
-        assert!(UDP_PUNCHES.take().is_none(), "the UDP pool is full");
-        assert!(
-            TCP_PUNCHES.take().is_some(),
-            "a TCP punch must not wait on the UDP pool"
-        );
-        drop(held);
-    }
-
-    // At the last place it is the v6 punch that goes without, never the v4 one the peer counts on.
-    #[test]
-    fn the_last_place_goes_to_the_v4_punch() {
-        let _pools = pools();
-        let held: Vec<_> = (0..UDP_PUNCHES.max - 1)
-            .map(|_| UDP_PUNCHES.take().expect("a place up to the last"))
-            .collect();
-        let (v4, v6) = UDP_PUNCHES.take_pair(true, true);
-        assert!(v4.is_some(), "the last place goes to the v4 punch");
-        assert!(v6.is_none(), "and the v6 punch goes without");
-        drop(held);
     }
 
     // Declined is the listen, never the reply: with no place the PunchHoleSent still goes out,
@@ -1800,6 +1893,7 @@ mod tests {
             host: host.to_string(),
             host_prefix: String::new(),
             keep_alive: 0,
+            signal_challenge: Vec::new(),
         };
         let msg_punch = PunchHoleSent {
             webrtc_sdp_answer: "answer".to_owned(),
@@ -1827,56 +1921,6 @@ mod tests {
         assert_eq!(&sent.socket_addr_v6[..], b"v6");
     }
 
-    // The place is the wait: a listen that ends without a peer gives it back on its own. The end
-    // a test can reach is the peer's probe never coming, which `punch_udp` gives up on.
-    #[test]
-    fn a_listen_that_finds_no_peer_gives_its_place_back() {
-        let _pools = pools();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-            let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-            let peer = silent.local_addr().unwrap();
-            let before = UDP_PUNCHES.places.load(Ordering::Acquire);
-            let slot = UDP_PUNCHES.take().expect("a place");
-            assert_eq!(UDP_PUNCHES.places.load(Ordering::Acquire), before + 1);
-            let listened = udp_nat_listen(
-                Arc::new(socket),
-                peer,
-                peer,
-                crate::server::new_for_test(),
-                connection_meta(None, None),
-                slot,
-            )
-            .await;
-            assert!(listened.is_err(), "no peer, no session");
-            assert_eq!(
-                UDP_PUNCHES.places.load(Ordering::Acquire),
-                before,
-                "the place must come back with the wait"
-            );
-        });
-    }
-
-    // A SOCKS proxy makes `connect_tcp_local` dial the proxy and ignore the local address, so
-    // nothing these two assert can hold. Read once, from the same global config production reads.
-    fn proxied() -> bool {
-        hbb_common::config::Config::get_socks().is_some()
-    }
-
-    /// Both held while their addresses are read, so the pair cannot be the same port - which
-    /// `SO_REUSEPORT` would let bind twice rather than refuse, leaving the tests degenerate.
-    async fn free_loopback_pair() -> (SocketAddr, SocketAddr) {
-        let (a, b) = (
-            tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(),
-            tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(),
-        );
-        (a.local_addr().unwrap(), b.local_addr().unwrap())
-    }
-
     fn queue(route: &mut IceRoute, candidate: &str) -> bool {
         route.queue(candidate.to_owned())
     }
@@ -1899,214 +1943,6 @@ mod tests {
     }
 
     #[test]
-    fn a_candidate_the_full_queue_refused_is_not_remembered() {
-        let (tx, mut rx) = mpsc::channel::<String>(1);
-        let mut route = IceRoute::new(tx);
-        assert!(queue(&mut route, "host"));
-        assert!(!queue(&mut route, "relay"));
-        // The re-send is the only repair for a refused candidate; remembering it would swallow it.
-        assert_eq!(rx.try_recv().ok(), Some("host".to_owned()));
-        assert!(queue(&mut route, "relay"));
-        assert_eq!(rx.try_recv().ok(), Some("relay".to_owned()));
-    }
-
-    #[test]
-    fn a_re_send_is_skipped_while_the_original_is_still_queued() {
-        let (tx, mut rx) = mpsc::channel::<String>(MAX_PENDING_REMOTE_ICE);
-        let mut route = IceRoute::new(tx);
-        for i in 0..MAX_PENDING_REMOTE_ICE {
-            assert!(queue(&mut route, &format!("candidate-{}", i)));
-        }
-        assert!(queue(&mut route, "candidate-0"));
-        let mut queued = 0;
-        while rx.try_recv().is_ok() {
-            queued += 1;
-        }
-        assert_eq!(queued, MAX_PENDING_REMOTE_ICE);
-    }
-
-    #[test]
-    fn the_window_forgets_in_arrival_order() {
-        let (tx, mut rx) = mpsc::channel::<String>(MAX_PENDING_REMOTE_ICE);
-        let mut route = IceRoute::new(tx);
-        for i in 0..=ICE_DEDUP_WINDOW {
-            assert!(queue(&mut route, &format!("candidate-{}", i)));
-            assert!(rx.try_recv().is_ok());
-        }
-        // The oldest digest made room for the newest, so its re-send is admitted again.
-        assert!(queue(&mut route, "candidate-0"));
-        assert!(rx.try_recv().is_ok());
-        // A recent one is still skipped.
-        let recent = format!("candidate-{}", ICE_DEDUP_WINDOW);
-        assert!(queue(&mut route, &recent));
-        assert!(rx.try_recv().is_err());
-    }
-
-    // The second way in that the repeat punch opens: a punch reaching a peer already in SYN_SENT
-    // is answered by that socket rather than reset, and the two ends come up on one connection.
-    // A punch that misses the crossing is reset outright here, loopback having no NAT to absorb
-    // it and no round trip to hide behind - so a single punch lands only by luck, and repeating
-    // is what makes it land at all. That is the premise of the repeat, asserted directly. A round
-    // that misses costs one loopback RST, so rounds are cheap and there are many.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_punch_that_meets_the_peers_syn_connects_both_ends() {
-        // The crossing needs both connects genuinely in flight at once. Loopback answers a SYN to
-        // a port nobody is listening on with an instant RST, so on one CPU the first connect runs
-        // to completion before the second is scheduled and no round can ever cross - a property of
-        // the box, which this test cannot tell apart from a broken punch.
-        if proxied() || std::thread::available_parallelism().map_or(true, |cpus| cpus.get() < 2) {
-            return;
-        }
-        for _ in 0..256 {
-            let (a, b) = free_loopback_pair().await;
-            // Held for the whole crossing, because production always has one here and the design
-            // rests on which of the two the kernel hands the connection to: the punch and the
-            // peer's SYN share a four-tuple exactly, the listener only matches the address, and
-            // the punch has to win that or every crossing would be swallowed as a plain accept.
-            let listener = new_listener(a, true).await.unwrap();
-            let to_b = tokio::spawn(socket_client::connect_tcp_local(b, Some(a), 3000));
-            let to_a = tokio::spawn(socket_client::connect_tcp_local(a, Some(b), 3000));
-            let (at_a, at_b) = tokio::join!(to_b, to_a);
-            let (Ok(Ok(mut at_a)), Ok(Ok(mut at_b))) = (at_a, at_b) else {
-                continue;
-            };
-            at_a.send_bytes(bytes::Bytes::from_static(b"punch"))
-                .await
-                .unwrap();
-            let got = at_b.next_timeout(3000).await.unwrap().unwrap();
-            assert_eq!(&got[..], b"punch", "both ends must share one connection");
-            assert!(
-                hbb_common::timeout(200, listener.accept()).await.is_err(),
-                "the crossing must reach the punch, not be accepted as an inbound connection"
-            );
-            return;
-        }
-        panic!("no punch met the peer's SYN in 256 rounds on a machine that can cross them");
-    }
-
-    // The punch binds the address the listener already holds, so it has to go through the same
-    // `connect_tcp_local` production uses - a punch built by hand here would still pass if
-    // `new_socket` ever stopped setting the reuse flags, while every real punch failed to bind.
-    // The peer's view of the source port is what proves the bind took: a fallback to an ephemeral
-    // one would connect just as happily.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_punch_binds_the_address_the_listener_holds() {
-        if proxied() {
-            return;
-        }
-        // `free_loopback_pair` hands back ports it no longer holds, so another process can take
-        // one in between; retry rather than fail for something the punch had no part in.
-        for _ in 0..8 {
-            let (local, peer_addr) = free_loopback_pair().await;
-            let (Ok(listener), Ok(peer)) = (
-                new_listener(local, true).await,
-                new_listener(peer_addr, true).await,
-            ) else {
-                continue;
-            };
-            let punch = tokio::spawn(socket_client::connect_tcp_local(
-                peer_addr,
-                Some(local),
-                1500,
-            ));
-            let (_peer_side, seen_as) = hbb_common::timeout(3000, peer.accept())
-                .await
-                .expect("the punch must reach the peer")
-                .unwrap();
-            assert_eq!(
-                seen_as.port(),
-                local.port(),
-                "the punch must leave from the address the listener holds, not an ephemeral one"
-            );
-            // Held, not asserted and dropped: the coexistence below is only exercised while this
-            // socket is still on the address, which is the state production spends its window in.
-            let _punched = punch.await.unwrap().expect("the punch must connect");
-
-            let dialed = tokio::spawn(tokio::net::TcpStream::connect(local));
-            let accepted = hbb_common::timeout(3000, listener.accept()).await;
-            assert!(
-                matches!(accepted, Ok(Ok(_))),
-                "the listener must still take connections while a punch shares its address: {accepted:?}"
-            );
-            assert!(dialed.await.unwrap().is_ok());
-            return;
-        }
-        panic!("could not hold two free loopback addresses in 8 tries");
-    }
-
-    // The schedule on its own, against a paused clock: the window is CONNECT_TIMEOUT long, and
-    // what these pin is where inside it the punches fall, which no socket could show.
-    #[tokio::test(start_paused = true)]
-    async fn the_punches_end_on_one_at_the_deadline() {
-        use super::{punch_until, PUNCH_GRACE, PUNCH_INTERVAL, PUNCH_MAX_INTERVAL};
-        use hbb_common::{anyhow::anyhow, config::CONNECT_TIMEOUT};
-        use std::time::Duration;
-        use tokio::time::Instant;
-
-        let peer: SocketAddr = "127.0.0.1:1".parse().unwrap();
-        let start = Instant::now();
-        let until = start + Duration::from_millis(CONNECT_TIMEOUT);
-        let mut punches = Vec::new();
-        // A gateway that answers with RST: every punch fails the moment it is made.
-        let met = punch_until::<(), _, _>(until, peer, |ms| {
-            punches.push((Instant::now(), ms));
-            async { Err(anyhow!("RST")) }
-        })
-        .await;
-        assert!(met.is_none());
-        assert_eq!(
-            Instant::now(),
-            until,
-            "must return the moment the window closes, not a backoff later"
-        );
-        // Tokio rounds every sleep up to the next millisecond.
-        let slack = Duration::from_millis(1);
-        assert!(punches[0].0 - start <= Duration::from_secs_f32(PUNCH_INTERVAL) + slack);
-        for pair in punches.windows(2) {
-            assert!(
-                pair[1].0 - pair[0].0 <= Duration::from_secs_f32(PUNCH_MAX_INTERVAL) + slack,
-                "no gap in the window may exceed the backoff ceiling: {pair:?}"
-            );
-        }
-        assert_eq!(
-            *punches.last().unwrap(),
-            (until, PUNCH_GRACE),
-            "the window must end on a punch, given the whole grace"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_punch_in_flight_runs_the_grace_past_the_deadline_and_no_further() {
-        use super::{punch_until, PUNCH_GRACE};
-        use hbb_common::{anyhow::anyhow, config::CONNECT_TIMEOUT};
-        use std::time::Duration;
-        use tokio::time::Instant;
-
-        let peer: SocketAddr = "127.0.0.1:1".parse().unwrap();
-        let until = Instant::now() + Duration::from_millis(CONNECT_TIMEOUT);
-        let mut punches = 0;
-        // A gateway that drops the SYN in silence: the punch sits in SYN_SENT for all it is given.
-        let met = punch_until::<(), _, _>(until, peer, |ms| {
-            punches += 1;
-            async move {
-                tokio::time::sleep(Duration::from_millis(ms)).await;
-                Err(anyhow!("timed out"))
-            }
-        })
-        .await;
-        assert!(met.is_none());
-        assert_eq!(
-            punches, 1,
-            "a punch held in SYN_SENT is the only one the window needs"
-        );
-        assert_eq!(
-            Instant::now(),
-            until + Duration::from_millis(PUNCH_GRACE),
-            "must return when the grace runs out, not a backoff later"
-        );
-    }
-
-    #[test]
     fn test_answerer_slots_cap_and_release() {
         let held: Vec<_> = (0..MAX_WEBRTC_ANSWERERS)
             .map(|_| AnswererSlot::take().unwrap())
@@ -2114,5 +1950,75 @@ mod tests {
         assert!(AnswererSlot::take().is_none());
         drop(held);
         assert!(AnswererSlot::take().is_some());
+    }
+
+    #[test]
+    fn relay_request_must_name_a_relay_this_peer_offered() {
+        let host: std::net::SocketAddr = "127.0.0.1:21116".parse().unwrap();
+        let mediator = RendezvousMediator {
+            addr: host.into_target_addr().unwrap(),
+            host: host.to_string(),
+            host_prefix: String::new(),
+            keep_alive: 0,
+            signal_challenge: Vec::new(),
+        };
+        let now = Instant::now();
+        super::remember_reported_relay("reported-relay.example", now);
+        let request = |relay_server: &str, uuid: &str| super::RequestRelay {
+            relay_server: relay_server.to_owned(),
+            uuid: uuid.to_owned(),
+            ..Default::default()
+        };
+        let uuid = "e4c181d0-41c7-4ae6-8ef0-36581b6b2b12";
+        let reported = request(&format!("reported-relay.example:{}", hbb_common::config::RELAY_PORT), uuid);
+        assert!(mediator.check_relay_request(&reported, now).is_ok());
+        let unknown = request("other-host.example:21117", uuid);
+        assert!(mediator.check_relay_request(&unknown, now).is_err());
+        let bad_uuid = request("reported-relay.example", "a\r\nb");
+        assert!(mediator.check_relay_request(&bad_uuid, now).is_err());
+        let fallback = request(&mediator.get_relay_server(String::new()), uuid);
+        assert!(mediator.check_relay_request(&fallback, now).is_ok());
+        let expired = now + super::REPORTED_RELAY_TTL;
+        assert!(mediator.check_relay_request(&reported, expired).is_err());
+        // Not at `expired`: an insert that late would purge what parallel tests just reported.
+        super::remember_reported_relay(
+            "reported-relay.example",
+            now + super::REPORTED_RELAY_TTL / 2,
+        );
+        assert!(mediator.check_relay_request(&reported, expired).is_ok());
+    }
+
+    #[test]
+    fn reported_relay_is_refused_once_it_expires() {
+        let reported_at = Instant::now();
+        super::remember_reported_relay("expiring-relay.example", reported_at);
+        let just_before = reported_at + super::REPORTED_RELAY_TTL - Duration::from_secs(1);
+        assert!(super::is_reported_relay(
+            &format!("expiring-relay.example:{}", hbb_common::config::RELAY_PORT),
+            just_before
+        ));
+        let expired = reported_at + super::REPORTED_RELAY_TTL;
+        assert!(!super::is_reported_relay(
+            &format!("expiring-relay.example:{}", hbb_common::config::RELAY_PORT),
+            expired
+        ));
+    }
+
+    #[test]
+    fn reporting_a_relay_again_restarts_its_expiry() {
+        let first = Instant::now();
+        let again = first + super::REPORTED_RELAY_TTL / 2;
+        super::remember_reported_relay("refreshed-relay.example", first);
+        super::remember_reported_relay("refreshed-relay.example", again);
+        let past_first = first + super::REPORTED_RELAY_TTL;
+        assert!(super::is_reported_relay(
+            "refreshed-relay.example",
+            past_first
+        ));
+        let past_again = again + super::REPORTED_RELAY_TTL;
+        assert!(!super::is_reported_relay(
+            "refreshed-relay.example",
+            past_again
+        ));
     }
 }

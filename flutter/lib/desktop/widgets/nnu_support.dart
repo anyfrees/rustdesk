@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'nnu_action_button.dart';
 
-const nnuSupportTitle = 'IT技术支持专用版本，请勿共享给他人使用。';
+const nnuSupportTitle = 'RustDesk VIP支持专业版';
 const nnuNoticeSeenOption = 'nnu-first-use-notice-seen';
 const nnuSupportEmail = 'admin@nnu.cn';
 
@@ -82,9 +83,9 @@ class NnuSupportFooter extends StatelessWidget {
                     style: theme.textTheme.bodySmall?.copyWith(height: 1.5),
                   ),
                 ),
-                TextButton(
+                NnuActionButton(
+                  label: '知道了',
                   onPressed: onDismissNotice,
-                  child: const Text('知道了'),
                 ),
               ],
             ),
@@ -92,15 +93,9 @@ class NnuSupportFooter extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(right: 8),
           child: LayoutBuilder(builder: (context, constraints) {
-            final link = TextButton(
+            final link = NnuActionButton(
+              label: 'nnu.cn 提供服务支持',
               onPressed: onOpenSupport,
-              style: TextButton.styleFrom(
-                minimumSize: const Size(0, 42),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                foregroundColor: theme.colorScheme.primary,
-              ),
-              child:
-                  const Text('nnu.cn 提供服务支持', style: TextStyle(fontSize: 12)),
             );
             if (constraints.maxWidth < 480 ||
                 MediaQuery.textScalerOf(context).scale(12) > 18) {
@@ -131,10 +126,9 @@ class NnuSupportFooter extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text('连接异常？联系技术支持：', style: theme.textTheme.bodySmall),
-                TextButton(
+                NnuActionButton(
+                  label: nnuSupportEmail,
                   onPressed: onContactSupport,
-                  child: const Text(nnuSupportEmail,
-                      style: TextStyle(fontSize: 12)),
                 ),
               ],
             ),

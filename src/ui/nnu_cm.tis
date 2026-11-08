@@ -1,0 +1,174 @@
+var nnu_cm_mode = 0;
+var nnu_cm_id = 0;
+var nnu_cm_expanded = false;
+var nnu_cm_motion = is_win ? handler.nnu_motion() : false;
+if (is_win) self.attributes["nnu-glass"] = handler.nnu_glass() ? "true" : "false";
+
+function nnuCmClient(id) {
+    if (!is_win) return null;
+    try {
+        for (var c in JSON.parse(handler.nnu_clients())) {
+            if (c.id == id) return c;
+        }
+    } catch(e) { stderr.println("Cannot read certified client state: " + e); }
+    return null;
+}
+
+function nnuCmEligible(c) {
+    if (!is_win || !c || !c.nnu || !c.nnu.official_support || c.disconnected ||
+        c.is_file_transfer || c.is_view_camera || c.is_terminal || c.port_forward) return false;
+    var active = 0;
+    for (var peer in connections) if (!peer.disconnected) ++active;
+    return active == 1 && (c.authorized ? c.nnu.nnu_session_connected : c.nnu.official_support.click_prompt);
+}
+
+function nnuCmRestoreClients() {
+    if (!is_win) return;
+    try {
+        for (var c in JSON.parse(handler.nnu_clients())) {
+            var exists = false;
+            for (var peer in connections) if (peer.id == c.id) exists = true;
+            if (!exists) handler.addConnection(c.id,c.is_file_transfer,c.is_view_camera,c.is_terminal,c.port_forward,
+                c.peer_id,c.name,c.avatar,c.authorized,c.keyboard,c.clipboard,c.audio,c.file,c.restart,c.recording,c.block_input,c.privacy_mode);
+        }
+    } catch(e) { stderr.println("Cannot restore certified client state: " + e); }
+}
+
+function nnuCmSyncWindow() {
+    if (!is_win || !body) return;
+    var c = connections[body.cur];
+    var next = 0;
+    if (nnuCmEligible(c)) {
+        if (nnu_cm_id != c.id) { nnu_cm_expanded = false; nnu_cm_id = c.id; }
+        next = !c.authorized ? 1 : (nnu_cm_expanded ? (show_chat ? 4 : 3) : 2);
+    }
+    if (next == 0 && nnu_cm_mode == 0) return;
+    if (next != nnu_cm_mode) {
+        self.attributes["nnu-mode"] = next;
+        view.windowFrame = next ? #transparent : #solid;
+        if (next == 0) {
+            handler.nnu_layout(0);
+            var (sx,sy,sw,sh) = view.screenBox(#workarea,#rectw);
+            var w = scaleIt(300), h = scaleIt(400);
+            if (w > sw) w=sw;
+            if (h > sh) h=sh;
+            view.move(sx+sw-w,sy,w,h);
+            nnu_cm_expanded = false;
+        }
+        nnu_cm_mode = next;
+        body.update();
+    }
+    if (next && !handler.nnu_layout(next)) stderr.println("Could not position the certified connection window");
+}
+
+function nnuCmAvatar(c,bubble=false) {
+    var identity = c.nnu.official_support;
+    var name = identity.account_name || c.name;
+    var photo = identity.avatar_jpeg || "";
+    return <div .nnu-photo style={photo ? "background-image:url(data:image/jpeg;base64,"+photo+");" : ""}>
+        {photo ? "" : name.substr(0,1)}
+    </div>;
+}
+
+var nnu_verified_icon = <svg viewBox="0 0 24 24"><path d="M12 2l3 2 3.6.4.7 3.5L22 11l-1.6 3.2-.4 3.6-3.5.7L13 22l-3-2-3.6-.4-.7-3.5L2 13l1.6-3.2.4-3.6 3.5-.7z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.5 12l3 3 6-6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>;
+var nnu_lock_icon = <svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="15" r="1.3"/></svg>;
+var nnu_file_icon = <svg viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5zM14 3v6h5M12 18v-6m-3 3l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>;
+
+function nnuCmRender(c) {
+    var identity = c.nnu.official_support;
+    var pending = !c.authorized;
+    if (!pending && !nnu_cm_expanded) return <div .nnu-root .nnu-compact>
+        <div .nnu-green-wave data-wave="0"/><div .nnu-green-wave data-wave="1"/>
+        <button #nnu-bubble title={"展开认证信息 · " + (identity.account_name || c.name)}>{nnuCmAvatar(c,true)}</button>
+    </div>;
+    var callback = function(text) { body.sendMsg(text); };
+    var can_file = c.file && (identity.peer_platform || "").toLowerCase() != "ios";
+    return <div .nnu-root>
+        {pending ? <div .nnu-ripple data-wave="0"/> : ""}
+        {pending ? <div .nnu-ripple data-wave="1"/> : ""}
+        <section .nnu-panel>
+            <div .nnu-person role="window-caption">
+                {nnuCmAvatar(c)}
+                <div .nnu-person-text><div .nnu-name-line>
+                    <span .nnu-name title="已通过官方认证">{identity.account_name || c.name}</span>
+                    <span .nnu-cert title="已通过官方认证"><span class={"nnu-verified " + identity.badge_color}>{nnu_verified_icon}</span>{identity.display_name}</span>
+                </div>{pending ? <div .nnu-description>{identity.introduction}</div> : ""}</div>
+            </div>
+            {pending ? <div .nnu-request>
+                <h2>远程协助请求</h2>
+                <div .nnu-permission><span .nnu-lock>{nnu_lock_icon}</span><span>{identity.full_control_on_accept ? "接受后将授予完整远程控制权限" : "接受后将按本机策略授予远程访问权限"}</span></div>
+                <div .nnu-buttons><button #nnu-reject>拒绝远程</button><button #nnu-accept disabled={c.nnu_wait ? true : false}>{c.nnu_wait ? "正在连接…" : "接受远程"}</button></div>
+            </div> : <div .nnu-session>
+                <div .nnu-session-top><div><div .nnu-id>{"ID  " + c.peer_id}</div><div .nnu-status><span .nnu-dot/>已连接 <span #time>{getElapsed(c.time,c.now)}</span></div></div>
+                    <div .nnu-tools><button #nnu-chat title="聊天">{svg_chat}</button>{can_file ? <button #nnu-file title="传输文件">{nnu_file_icon}</button> : ""}<button #nnu-collapse title="收起">−</button></div>
+                </div>
+                <div .nnu-intro-label>认证说明</div><div .nnu-notes>{identity.introduction}</div>
+                {show_chat ? <div .nnu-chat><ChatBox msgs={c.msgs} callback={callback}/></div> : ""}
+                <button #nnu-disconnect>断开连接</button>
+            </div>}
+        </section>
+    </div>;
+}
+
+event click $(#nnu-accept) {
+    var c=connections[body.cur];
+    if (!nnuCmEligible(c) || c.authorized || c.nnu_wait) return;
+    checkClickTime(function() { c.nnu_wait=true; body.update(); handler.authorize(c.id); });
+}
+event click $(#nnu-reject,#nnu-disconnect) {
+    var c=connections[body.cur];
+    if (c) checkClickTime(function() { handler.close(c.id); });
+}
+event mousedown $(#nnu-bubble) {
+    var moved=handler.nnu_drag();
+    if (!moved) nnu_cm_expanded=true;
+    update();
+    return true;
+}
+event click $(#nnu-bubble) {
+    nnu_cm_expanded=true;
+    update();
+}
+event click $(#nnu-collapse) {
+    nnu_cm_expanded=false;
+    show_chat=false;
+    update();
+}
+event click $(#nnu-chat) {
+    show_chat=!show_chat;
+    update();
+}
+event click $(#nnu-file) {
+    var c=connections[body.cur];
+    checkClickTime(function() {
+        if (!handler.nnu_transfer(c.id)) stderr.println("Could not open certified file transfer");
+    });
+}
+
+function nnuCmWaves() {
+    if (nnu_cm_motion && nnu_cm_mode) {
+        var cycles=getTime()/5600.;
+        var phase=cycles-cycles.toInteger();
+        for (var ring in $$(.nnu-ripple,.nnu-green-wave)) {
+            var t=phase+ring.attributes["data-wave"].toInteger()*.5;
+            if (t>=1) t-=1;
+            var grow=1+t*(nnu_cm_mode==2 ? .22 : .055);
+            ring.style.set {transform:"scale("+grow+")",opacity:Math.sin(t*3.141592653589793)*.48};
+            if (nnu_cm_mode != 2) ring.style.set {
+                border-top-color:nnuCmWaveColor(phase),border-right-color:nnuCmWaveColor(phase+.25),
+                border-bottom-color:nnuCmWaveColor(phase+.5),border-left-color:nnuCmWaveColor(phase+.75)
+            };
+        }
+    }
+    self.timer(nnu_cm_mode && nnu_cm_motion ? 40ms : 500ms,nnuCmWaves);
+}
+function nnuCmWaveColor(phase) {
+    var colors=[[80,149,237],[88,198,208],[223,200,149],[104,183,208]];
+    if (phase>=1) phase-=1;
+    var value=phase*4;
+    var index=value.toInteger(), fraction=value-index;
+    var a=colors[index],b=colors[(index+1)%4];
+    return String.printf("#%02x%02x%02x",(a[0]+(b[0]-a[0])*fraction).toInteger(),
+        (a[1]+(b[1]-a[1])*fraction).toInteger(),(a[2]+(b[2]-a[2])*fraction).toInteger());
+}
+if (is_win) self.timer(40ms,nnuCmWaves);

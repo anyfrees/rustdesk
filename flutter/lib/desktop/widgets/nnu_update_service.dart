@@ -5,9 +5,10 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart'
     show Ed25519, KeyPairType, Signature, SimplePublicKey;
+import 'nnu_external_update.dart';
 
-const nnuClientBuild = 2026103104;
-const nnuClientVersion = '1.5.0 · NNU UI4';
+const nnuClientBuild = 2026110804;
+const nnuClientVersion = "1.5.1 NNU UI21.26";
 const nnuUpdateBase = 'https://rd.nnu.cn/client-updates/';
 const nnuUpdatePublicKey = '1umorhoB3pej9Cu4Jlvi/n1JHPdLd6XxcdxDSFaWYGQ=';
 
@@ -16,16 +17,18 @@ class NnuUpdateArtifact {
   final String digest;
   final int size;
   final Uri url;
+  final List<Uri> mirrors;
 
   NnuUpdateArtifact(Map<String, dynamic> data, int build)
       : name = data['name'] as String,
         digest = data['sha256'] as String,
         size = data['size'] as int,
-        url = Uri.parse(data['url'] as String) {
+        url = Uri.parse(data['url'] as String),
+        mirrors = ((data['mirrors'] ?? []) as List).map((value) => nnuExternalUri(value as String)).toList() {
     if (!RegExp(r'^[a-zA-Z0-9._-]+\.(exe|msi|zip)$').hasMatch(name) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(digest) ||
         size <= 0 ||
-        size > 512 * 1024 * 1024 ||
+        size > 512 * 1024 * 1024 || mirrors.length > 3 ||
         url.toString() != '${nnuUpdateBase}releases/$build/$name') {
       throw const FormatException('更新包信息不符合要求');
     }
@@ -49,7 +52,10 @@ class NnuRelease {
     final signature = Signature(base64Decode(data['signature'] as String),
         publicKey: SimplePublicKey(base64Decode(publicKey),
             type: KeyPairType.ed25519));
-    if (!await Ed25519().verify(payload, signature: signature)) {
+    final signer = data.containsKey('certificate')
+        ? await nnuCertifiedUpdateKey(data['certificate'] as Map<String, dynamic>, publicKey)
+        : signature.publicKey;
+    if (!await Ed25519().verify(payload, signature: Signature(signature.bytes, publicKey: signer))) {
       throw const FormatException('更新清单签名校验失败');
     }
     final manifest = jsonDecode(utf8.decode(payload)) as Map<String, dynamic>;
@@ -67,6 +73,9 @@ class NnuRelease {
     final artifacts = (manifest['artifacts'] as Map<String, dynamic>).map((key,
             value) =>
         MapEntry(key, NnuUpdateArtifact(value as Map<String, dynamic>, build)));
+    if (data.containsKey('certificate') && (manifest['delivery'] != 'external' || artifacts.values.any((a) => a.mirrors.isEmpty))) {
+      throw const FormatException('外链发布清单不完整');
+    }
     if (!artifacts.containsKey('portable') || !artifacts.containsKey('msi')) {
       throw const FormatException('更新清单缺少 Windows 安装包');
     }
@@ -82,7 +91,7 @@ class NnuUpdateService {
 
   Future<NnuRelease> check() async {
     final request = await _client
-        .getUrl(Uri.parse('${nnuUpdateBase}stable.json'))
+        .getUrl(Uri.parse('${nnuUpdateBase}stable.json?protocol=2'))
         .timeout(const Duration(seconds: 15));
     request.followRedirects = false;
     final response = await request.close().timeout(const Duration(seconds: 15));
@@ -97,7 +106,11 @@ class NnuUpdateService {
   }
 
   Future<File> download(
-      NnuUpdateArtifact artifact, void Function(double) onProgress) async {
+      NnuUpdateArtifact artifact, void Function(double) onProgress,
+      {void Function()? onVerifying}) async {
+    if (artifact.mirrors.isNotEmpty) {
+      return _downloadExternal(artifact, onProgress, onVerifying);
+    }
     final directory = await Directory.systemTemp.createTemp('nnu-update-');
     final partial =
         File('${directory.path}${Platform.pathSeparator}${artifact.name}.part');
@@ -119,6 +132,7 @@ class NnuUpdateService {
         onProgress(written / artifact.size);
       }
       await output.close();
+      onVerifying?.call();
       if (written != artifact.size ||
           (await sha256.bind(partial.openRead()).first).toString() !=
               artifact.digest) {
@@ -130,6 +144,49 @@ class NnuUpdateService {
       await output.close();
       if (await partial.exists()) await partial.delete();
       rethrow;
+    }
+  }
+
+  Future<File> _downloadExternal(
+      NnuUpdateArtifact artifact, void Function(double) onProgress,
+      void Function()? onVerifying) async {
+    final downloader = NnuExternalDownload();
+    final directory = await Directory.systemTemp.createTemp('nnu-external-update-');
+    final partial = File('${directory.path}${Platform.pathSeparator}${artifact.name}.part');
+    try {
+      for (var index = 0; index < artifact.mirrors.length; index++) {
+        final output = partial.openWrite();
+        var written = 0;
+        try {
+          final response = await downloader.open(artifact.mirrors[index]);
+          if (response.contentLength >= 0 && response.contentLength != artifact.size) {
+            await response.listen((_) {}).cancel();
+            throw const FormatException('网盘文件大小已变化，请联系管理员重新发布');
+          }
+          await for (final chunk in response.timeout(const Duration(seconds: 30))) {
+            written += chunk.length;
+            if (written > artifact.size) throw const FormatException('更新包大小超出清单');
+            output.add(chunk);
+            onProgress(written / artifact.size);
+          }
+          await output.close();
+          onVerifying?.call();
+          if (written != artifact.size || (await sha256.bind(partial.openRead()).first).toString() != artifact.digest) {
+            throw const FormatException('网盘更新包完整性校验失败');
+          }
+          return await partial.rename('${directory.path}${Platform.pathSeparator}${artifact.name}');
+        } catch (_) {
+          await output.close();
+          if (await partial.exists()) await partial.delete();
+          if (index == artifact.mirrors.length - 1) rethrow;
+        }
+      }
+      throw const FormatException('没有可用的下载地址');
+    } catch (_) {
+      if (await directory.exists()) await directory.delete(recursive: true);
+      rethrow;
+    } finally {
+      downloader.close();
     }
   }
 }

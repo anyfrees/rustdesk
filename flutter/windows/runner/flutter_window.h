@@ -5,8 +5,10 @@
 #include <flutter/flutter_view_controller.h>
 
 #include <memory>
+#include <optional>
 
 #include "win32_window.h"
+#include "nnu_trusted_frame.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -36,6 +38,8 @@ class FlutterWindow : public Win32Window {
 
   // Number of force-redraw attempts made so far.
   UINT force_redraw_tries_ = 0;
+  std::optional<LONG_PTR> trusted_frame_style_;
+  nnu::TrustedFrame trusted_frame_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

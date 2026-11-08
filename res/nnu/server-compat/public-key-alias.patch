@@ -1,0 +1,40 @@
+--- a/src/common.rs
++++ b/src/common.rs
+@@ -10,6 +10,15 @@
+     net::SocketAddr,
+     time::{Instant, SystemTime},
+ };
++
++pub(crate) fn is_public_key_alias(candidate: &str) -> bool {
++    match std::env::var("NNU_PUBLIC_KEY_ALIAS") {
++        Ok(alias) if !alias.is_empty() && candidate == alias => base64::decode(alias)
++            .map(|key| key.len() == sign::PUBLICKEYBYTES)
++            .unwrap_or(false),
++        _ => false,
++    }
++}
+ 
+ #[allow(dead_code)]
+ pub(crate) fn get_expired_time() -> Instant {
+--- a/src/rendezvous_server.rs
++++ b/src/rendezvous_server.rs
+@@ -679,7 +679,7 @@
+         ws: bool,
+     ) -> ResultType<(RendezvousMessage, Option<SocketAddr>)> {
+         let mut ph = ph;
+-        if !key.is_empty() && ph.licence_key != key {
++        if !key.is_empty() && ph.licence_key != key && !crate::common::is_public_key_alias(&ph.licence_key) {
+             log::warn!("Authentication failed from {} for peer {} - invalid key", addr, ph.id);
+             let mut msg_out = RendezvousMessage::new();
+             msg_out.set_punch_hole_response(PunchHoleResponse {
+--- a/src/relay_server.rs
++++ b/src/relay_server.rs
+@@ -427,7 +427,7 @@
+     if let Ok(Some(Ok(bytes))) = timeout(30_000, stream.recv()).await {
+         if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
+             if let Some(rendezvous_message::Union::RequestRelay(rf)) = msg_in.union {
+-                if !key.is_empty() && rf.licence_key != key {
++                if !key.is_empty() && rf.licence_key != key && !crate::common::is_public_key_alias(&rf.licence_key) {
+                     log::warn!("Relay authentication failed from {} - invalid key", addr);
+                     return;
+                 }

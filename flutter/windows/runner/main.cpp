@@ -9,20 +9,25 @@
 
 #include "win32_desktop.h"
 #include "flutter_window.h"
+#include "nnu_entropy_runtime.h"
 #include "utils.h"
+#include "service_control.h"
 
 typedef char** (*FUNC_RUSTDESK_CORE_MAIN)(int*);
 typedef void (*FUNC_RUSTDESK_FREE_ARGS)( char**, int);
 typedef int (*FUNC_RUSTDESK_GET_APP_NAME)(wchar_t*, int);
 typedef int (*FUNC_RUSTDESK_IS_DISABLE_INSTALLATION)();
 /// Note: `--server`, `--service` are already handled in [core_main.rs].
-const std::vector<std::string> parameters_white_list = {"--install", "--cm"};
+const std::vector<std::string> parameters_white_list = {"--install", "--cm", "--nnu-pin-dialog", "--nnu-voice-call"};
 
 const wchar_t* getWindowClassName();
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command)
 {
+  if (auto result = service_control::HandleCommand(command_line)) {
+    return static_cast<int>(*result);
+  }
   HINSTANCE hInstance = LoadLibraryA("librustdesk.dll");
   if (!hInstance)
   {
@@ -60,6 +65,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
     // std::cout << "RustDesk [" << args_str << "], core returns false, exiting without launching Flutter app." << std::endl;
     return EXIT_SUCCESS;
+  }
+  if (!NnuLoadEntropyRuntime()) {
+    std::cerr << "Failed to load packaged entropy runtime: " << GetLastError() << std::endl;
+    return EXIT_FAILURE;
   }
   std::vector<std::string> rust_args(c_args, c_args + args_len);
   free_c_args(c_args, args_len);
@@ -137,6 +146,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   flutter::DartProject project(L"data");
   // connection manager hide icon from taskbar
+  const bool is_voice_page = !command_line_arguments.empty() && command_line_arguments.front() == "--nnu-voice-call";
   bool is_cm_page = false;
   auto cmParam = std::string("--cm");
   if (!command_line_arguments.empty() && command_line_arguments.front().compare(0, cmParam.size(), cmParam.c_str()) == 0) {
@@ -168,15 +178,24 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Desktop::FitToWorkArea(origin, size);
 
   std::wstring window_title;
-  if (is_cm_page) {
-    window_title = app_name + L" - Connection Manager";
+  const std::wstring display_name = L"RustDesk VIP\u652f\u6301\u4e13\u4e1a\u7248";
+  if (is_voice_page) {
+    window_title = display_name + L" - Voice Call";
+  } else if (is_cm_page) {
+    window_title = display_name + L" - Connection Manager";
   } else if (is_install_page) {
-    window_title = app_name + L" - Install";
+    window_title = display_name + L" - Install";
   } else {
-    window_title = app_name;
+    window_title = display_name;
   }
-  if (!window.CreateAndShow(window_title, origin, size, !is_cm_page)) {
+  if (!window.CreateAndShow(window_title, origin, size, !is_cm_page && !is_voice_page)) {
       return EXIT_FAILURE;
+  }
+  if (is_voice_page) {
+    const auto handle = window.GetHandle();
+    const LONG_PTR style = GetWindowLongPtr(handle, GWL_EXSTYLE);
+    SetWindowLongPtr(handle, GWL_EXSTYLE,
+                     (style & ~WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW);
   }
   window.SetQuitOnClose(true);
 

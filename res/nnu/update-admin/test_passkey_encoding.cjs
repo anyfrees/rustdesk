@@ -1,0 +1,20 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(__dirname + '/static/app.js', 'utf8');
+const helpers = source.slice(source.indexOf('const fromB64'), source.indexOf('function passkeyAvailable'));
+vm.runInNewContext(helpers + `
+  const bytes = Uint8Array.from({length:256},(_,i)=>i);
+  const encoded = toB64(bytes);
+  assert(/^[A-Za-z0-9_-]+$/.test(encoded));
+  assert.equal(Buffer.from(fromB64(encoded)).toString('hex'), Buffer.from(bytes).toString('hex'));
+  const options = passkeyOptions({challenge:encoded,user:{id:encoded},excludeCredentials:[{id:encoded}]},true);
+  assert.equal(options.challenge.length,256);
+  assert.equal(options.user.id.length,256);
+  assert.equal(options.excludeCredentials[0].id.length,256);
+  const credential = {id:encoded,rawId:bytes,type:'public-key',response:{clientDataJSON:bytes,attestationObject:bytes,authenticatorData:bytes,signature:bytes,userHandle:bytes,getTransports:()=>['internal']},getClientExtensionResults:()=>({})};
+  assert.equal(passkeyJSON(credential,true).response.attestationObject,encoded);
+  assert.equal(passkeyJSON(credential,false).response.userHandle,encoded);
+  assert.equal(passkeyJSON(credential,false).response.signature,encoded);
+`, {Uint8Array,atob,btoa,assert,Buffer});
+console.log('WebAuthn creation/assertion wire encoding: OK');

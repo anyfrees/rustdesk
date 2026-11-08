@@ -24,6 +24,7 @@ enum UserStatus { kDisabled, kNormal, kUnverified }
 // to-do: The UserPayload does not contain all the fields of the user.
 // Is all the fields of the user needed?
 class UserPayload {
+  String id = '';
   String name = '';
   String displayName = '';
   String avatar = '';
@@ -34,7 +35,8 @@ class UserPayload {
   bool isAdmin = false;
 
   UserPayload.fromJson(Map<String, dynamic> json)
-      : name = json['name'] ?? '',
+      : id = json['id']?.toString() ?? '',
+        name = json['name'] ?? '',
         displayName = json['display_name'] ?? '',
         avatar = json['avatar'] ?? '',
         email = json['email'] ?? '',
@@ -49,6 +51,7 @@ class UserPayload {
 
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> map = {
+      'id': id,
       'name': name,
       'display_name': displayName,
       'avatar': avatar,

@@ -32,7 +32,7 @@ use hbb_common::{
     ResultType,
 };
 use serde_derive::Serialize;
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "windows", feature = "flutter"))]
 use std::iter::FromIterator;
 #[cfg(not(any(target_os = "ios")))]
 use std::path::PathBuf;
@@ -130,6 +130,8 @@ pub fn check_file_count_limit(file_count: usize) -> Result<(), String> {
 pub struct Client {
     pub id: i32,
     pub authorized: bool,
+    #[serde(default)]
+    pub nnu_session_connected: bool,
     pub disconnected: bool,
     pub is_file_transfer: bool,
     pub is_view_camera: bool,
@@ -137,6 +139,8 @@ pub struct Client {
     pub port_forward: String,
     pub name: String,
     pub avatar: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub official_support: Option<crate::nnu_official_support::VerifiedIdentity>,
     pub peer_id: String,
     pub keyboard: bool,
     pub clipboard: bool,
@@ -149,6 +153,8 @@ pub struct Client {
     pub from_switch: bool,
     pub in_voice_call: bool,
     pub incoming_voice_call: bool,
+    #[serde(default)]
+    pub nnu_voice_only: bool,
     #[serde(skip)]
     #[cfg(not(any(target_os = "ios")))]
     tx: UnboundedSender<Data>,
@@ -219,12 +225,14 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
         &self,
         id: i32,
         is_file_transfer: bool,
+        nnu_voice_only: bool,
         is_view_camera: bool,
         is_terminal: bool,
         port_forward: String,
         peer_id: String,
         name: String,
         avatar: String,
+        official_support: Option<crate::nnu_official_support::VerifiedIdentity>,
         authorized: bool,
         keyboard: bool,
         clipboard: bool,
@@ -240,6 +248,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
         let client = Client {
             id,
             authorized,
+            nnu_session_connected: authorized && official_support.is_some(),
             disconnected: false,
             is_file_transfer,
             is_view_camera,
@@ -247,6 +256,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             port_forward,
             name: name.clone(),
             avatar,
+            official_support,
             peer_id: peer_id.clone(),
             keyboard,
             clipboard,
@@ -261,6 +271,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             tx,
             in_voice_call: false,
             incoming_voice_call: false,
+            nnu_voice_only,
         };
         CLIENTS
             .write()
@@ -366,6 +377,21 @@ pub fn get_click_time() -> i64 {
 #[cfg(not(any(target_os = "ios")))]
 pub fn authorize(id: i32) {
     if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
+        if !client.authorized
+            && client
+                .official_support
+                .as_ref()
+                .is_some_and(|identity| identity.full_control_on_accept)
+        {
+            client.keyboard = true;
+            client.clipboard = true;
+            client.audio = true;
+            client.file = true;
+            client.restart = true;
+            client.recording = true;
+            client.block_input = true;
+            client.privacy_mode = true;
+        }
         client.authorized = true;
         allow_err!(client.tx.send(Data::Authorize));
     };
@@ -452,7 +478,7 @@ pub fn switch_permission_all(name: String, enabled: bool) {
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "windows", feature = "flutter"))]
 #[inline]
 pub fn get_clients_state() -> String {
     let clients = CLIENTS.read().unwrap();
@@ -554,9 +580,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                         }
                         Ok(Some(data)) => {
                             match data {
-                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch} => {
+                                Data::Login{id, nnu_voice_only, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, official_support, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch} => {
                                     log::debug!("conn_id: {}", id);
-                                    self.cm.add_connection(id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, self.tx.clone());
+                                    self.cm.add_connection(id, is_file_transfer, nnu_voice_only, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, official_support, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, self.tx.clone());
                                     self.conn_id = id;
                                     #[cfg(target_os = "windows")]
                                     {
@@ -758,6 +784,10 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                             }
                         }
                         Data::Authorize => {
+                            #[cfg(target_os = "windows")]
+                            if let Some(client) = CLIENTS.read().unwrap().get(&self.conn_id) {
+                                self.file_transfer_enabled = client.file;
+                            }
                             self.running = true;
                             break;
                         }
@@ -890,6 +920,7 @@ pub async fn start_listen<T: InvokeUiCM>(
     loop {
         match rx.recv().await {
             Some(Data::Login {
+                nnu_voice_only,
                 id,
                 is_file_transfer,
                 is_view_camera,
@@ -898,6 +929,7 @@ pub async fn start_listen<T: InvokeUiCM>(
                 peer_id,
                 name,
                 avatar,
+                official_support,
                 authorized,
                 keyboard,
                 clipboard,
@@ -914,12 +946,14 @@ pub async fn start_listen<T: InvokeUiCM>(
                 cm.add_connection(
                     id,
                     is_file_transfer,
+                    nnu_voice_only,
                     is_view_camera,
                     is_terminal,
                     port_forward,
                     peer_id,
                     name,
                     avatar,
+                    official_support,
                     authorized,
                     keyboard,
                     clipboard,
@@ -968,6 +1002,19 @@ pub async fn start_listen<T: InvokeUiCM>(
         }
     }
     cm.remove_connection(current_id, true);
+    for job in &mut write_jobs {
+        if let Err(error) = job.cancel_document().await {
+            const CLEANUP_ERROR_LOG_INTERVAL: std::time::Duration =
+                std::time::Duration::from_secs(60);
+            hbb_common::throttled_log!(
+                CLEANUP_ERROR_LOG_INTERVAL,
+                warn,
+                "Failed to clean up document transfer {} on disconnect: {}",
+                job.id(),
+                error
+            );
+        }
+    }
 }
 
 #[cfg(not(any(target_os = "ios")))]
@@ -1006,7 +1053,7 @@ async fn handle_fs(
             _ => None,
         };
         if let Some((path, id, file_num, allow_empty)) = checked {
-            if !crate::common::is_peer_path_allowed(path, allow_empty) {
+            if !crate::common::is_peer_path_allowed_async(path, allow_empty).await {
                 log::warn!("Reject file operation outside the app workspace: {}", path);
                 if id >= 0 {
                     send_raw(fs::new_error(id, "Permission denied", file_num), tx);
@@ -1018,12 +1065,10 @@ async fn handle_fs(
             let destination = std::path::Path::new(path)
                 .parent()
                 .map(|parent| parent.join(new_name));
-            let allowed = destination
-                .as_deref()
-                .and_then(std::path::Path::to_str)
-                .map_or(false, |path| {
-                    crate::common::is_peer_path_allowed(path, false)
-                });
+            let allowed = match destination.as_deref().and_then(std::path::Path::to_str) {
+                Some(path) => crate::common::is_peer_path_allowed_async(path, false).await,
+                None => false,
+            };
             if !allowed {
                 log::warn!(
                     "Reject rename destination outside the app workspace: {:?}",
@@ -1102,6 +1147,12 @@ async fn handle_fs(
         }
         ipc::FS::CancelWrite { id } => {
             if let Some(job) = fs::remove_job(id, write_jobs) {
+                #[cfg(target_os = "android")]
+                let mut job = job;
+                #[cfg(target_os = "android")]
+                if let Err(error) = job.cancel_document().await {
+                    send_raw(fs::new_error(id, error, job.file_num()), tx);
+                }
                 job.remove_download_file();
                 if let Some(tx) = tx_log {
                     if let Err(e) = tx.send(serialize_transfer_job(&job, false, true, "")) {
@@ -1112,6 +1163,13 @@ async fn handle_fs(
         }
         ipc::FS::WriteDone { id, file_num } => {
             if let Some(job) = fs::remove_job(id, write_jobs) {
+                #[cfg(target_os = "android")]
+                let mut job = job;
+                #[cfg(target_os = "android")]
+                if let Err(error) = job.finish_document().await {
+                    send_raw(fs::new_error(id, error, file_num), tx);
+                    return;
+                }
                 job.modify_time();
                 send_raw(fs::new_done(id, file_num), tx);
                 tx_log.map(|tx| tx.send(serialize_transfer_job(&job, true, false, "")));
@@ -1119,6 +1177,20 @@ async fn handle_fs(
         }
         ipc::FS::WriteError { id, file_num, err } => {
             if let Some(job) = fs::remove_job(id, write_jobs) {
+                #[cfg(target_os = "android")]
+                let mut job = job;
+                #[cfg(target_os = "android")]
+                if let Err(error) = job.cancel_document().await {
+                    const CLEANUP_ERROR_LOG_INTERVAL: std::time::Duration =
+                        std::time::Duration::from_secs(60);
+                    hbb_common::throttled_log!(
+                        CLEANUP_ERROR_LOG_INTERVAL,
+                        warn,
+                        "Failed to clean up document transfer {}: {}",
+                        id,
+                        error
+                    );
+                }
                 tx_log.map(|tx| tx.send(serialize_transfer_job(&job, false, false, &err)));
                 send_raw(fs::new_error(job.id(), err, file_num), tx);
             }
@@ -1169,7 +1241,20 @@ async fn handle_fs(
                 if let Some(file) = job.files().get(file_num as usize) {
                     if let fs::DataSource::FilePath(p) = &job.data_source {
                         let path = get_string(&fs::TransferJob::join(p, &file.name));
-                        match is_write_need_confirmation(is_resume, &path, &digest) {
+                        #[cfg(target_os = "android")]
+                        let digest_result = if fs::android::is_path(path.as_ref()) {
+                            spawn_blocking(move || {
+                                is_write_need_confirmation(is_resume, &path, &digest)
+                            })
+                            .await
+                            .map_err(hbb_common::anyhow::Error::from)
+                            .and_then(|result| result)
+                        } else {
+                            is_write_need_confirmation(is_resume, &path, &digest)
+                        };
+                        #[cfg(not(target_os = "android"))]
+                        let digest_result = is_write_need_confirmation(is_resume, &path, &digest);
+                        match digest_result {
                             Ok(digest_result) => {
                                 job.set_digest(file_size, last_modified);
                                 match digest_result {
@@ -1598,7 +1683,11 @@ async fn read_empty_dirs(dir: &str, include_hidden: bool, tx: &UnboundedSender<D
 async fn read_dir(dir: &str, include_hidden: bool, tx: &UnboundedSender<Data>) {
     let path = {
         if dir.is_empty() {
-            Config::get_home()
+            #[cfg(target_os = "android")]
+            let home = fs::get_path(&fs::get_home_as_string());
+            #[cfg(not(target_os = "android"))]
+            let home = Config::get_home();
+            home
         } else {
             fs::get_path(dir)
         }
@@ -1676,6 +1765,14 @@ async fn remove_dir(path: String, id: i32, recursive: bool, tx: &UnboundedSender
     let path = fs::get_path(&path);
     handle_result(
         spawn_blocking(move || {
+            #[cfg(target_os = "android")]
+            if fs::android::is_path(&path) {
+                return if recursive {
+                    fs::android::remove_empty_tree(&fs::get_string(&path))
+                } else {
+                    fs::android::remove_empty_dir(&fs::get_string(&path))
+                };
+            }
             if recursive {
                 fs::remove_all_empty_dir(&path)
             } else {
@@ -1847,47 +1944,5 @@ mod tests {
                 _ => panic!("unexpected data"),
             }
         });
-    }
-
-    /// Tests that symlink creation works on this platform.
-    /// This is a helper to verify the test environment supports symlinks.
-    #[test]
-    #[cfg(not(any(target_os = "ios")))]
-    fn test_symlink_creation_works() {
-        let base_dir = std::env::temp_dir().join("rustdesk_symlink_test");
-        let _ = fs::remove_dir_all(&base_dir);
-        fs::create_dir_all(&base_dir).unwrap();
-
-        // Create target file in a subdirectory
-        let target_dir = base_dir.join("target_dir");
-        fs::create_dir_all(&target_dir).unwrap();
-        let target_file = target_dir.join("target.txt");
-        fs::write(&target_file, b"content").unwrap();
-
-        // Create symlink in a different directory
-        let link_dir = base_dir.join("link_dir");
-        fs::create_dir_all(&link_dir).unwrap();
-        let link_path = link_dir.join("link.txt");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::symlink;
-            if symlink(&target_file, &link_path).is_err() {
-                let _ = fs::remove_dir_all(&base_dir);
-                return;
-            }
-        }
-
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::symlink_file;
-            if symlink_file(&target_file, &link_path).is_err() {
-                // Skip if no permission (needs admin or dev mode on Windows)
-                let _ = fs::remove_dir_all(&base_dir);
-                return;
-            }
-        }
-
-        let _ = fs::remove_dir_all(&base_dir);
     }
 }

@@ -1,0 +1,16 @@
+--- a/src/rendezvous_server.rs
++++ b/src/rendezvous_server.rs
+@@ -1239,6 +1239,13 @@
+             }
+         }
+ 
++        if out_sk.is_none()
++            && std::env::var("NNU_SIGN_PEERS_WITH_LEGACY_KEY").as_deref() == Ok("Y")
++        {
++            let (_, sk) = crate::common::gen_sk(0);
++            out_sk = sk;
++        }
++
+         if !key.is_empty() {
+             log::info!("Key: {}", key);
+         }

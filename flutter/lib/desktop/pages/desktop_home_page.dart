@@ -13,6 +13,8 @@ import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_update_button.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_lan_info.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -24,6 +26,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 import '../widgets/button.dart';
+import '../widgets/nnu_platform_update.dart';
+import '../widgets/nnu_portable_install.dart';
 
 class DesktopHomePage extends StatefulWidget {
   const DesktopHomePage({Key? key}) : super(key: key);
@@ -92,6 +96,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),
+      if (!isOutgoingOnly) const NnuLanInfo(),
       FutureBuilder<Widget>(
         future: Future.value(
             Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
@@ -126,6 +131,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       ]);
     }
     final textColor = Theme.of(context).textTheme.titleLarge?.color;
+    final leftContent = SingleChildScrollView(
+      controller: _leftPaneScrollController,
+      child: Column(key: _childKey, children: children),
+    );
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: Container(
@@ -135,19 +144,51 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           children: [
             Column(
               children: [
-                SingleChildScrollView(
-                  controller: _leftPaneScrollController,
-                  child: Column(
-                    key: _childKey,
-                    children: children,
+                if (isWindows) ...[
+                  Expanded(child: leftContent),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                        isOutgoingOnly ? 44 : 16, 8, 16, 12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: NnuUpdateButton(
+                        installed: bind.mainIsInstalled(),
+                        requestAutomaticUpdate: () async {
+                          if (await bind.mainGetOption(key: 'nnu-auto-update') != 'Y') return 'manual';
+                          return bind.mainGetCommon(key: 'nnu-request-update');
+                        },
+                        readAutomaticProgress: () =>
+                            bind.mainGetCommon(key: 'nnu-update-progress'),
+                        installedPackageName: () => bind.mainGetCommonSync(
+                            key: 'download-file-1.5.0'),
+                        hasActiveSession: () => stateGlobal.videoConnCount.value > 0 ||
+                            rustDeskWinManager
+                                .getActiveWindows()
+                                .any((id) => id != kMainWindowId),
+                      ),
+                    ),
                   ),
-                ),
-                Expanded(child: Container())
+                ] else ...[
+                  if (isLinux) ...[
+                    Expanded(child: leftContent),
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                          isOutgoingOnly ? 44 : 16, 8, 16, 12),
+                      child: const SizedBox(
+                        width: double.infinity,
+                        child: NnuPlatformUpdateButton(),
+                      ),
+                    ),
+                  ] else ...[
+                    leftContent,
+                    Expanded(child: Container()),
+                  ],
+                ],
               ],
             ),
             if (isOutgoingOnly)
               Positioned(
-                bottom: 6,
+                bottom: isWindows ? 19 : 6,
                 left: 12,
                 child: Align(
                   alignment: Alignment.centerLeft,
@@ -181,7 +222,21 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   buildRightPane(BuildContext context) {
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
-      child: ConnectionPage(),
+      child: ConnectionPage(installationNotice: _portableInstallNotice()),
+    );
+  }
+
+  Widget? _portableInstallNotice() {
+    if (!isWindows || bind.isDisableInstallation() || bind.mainIsInstalled() ||
+        bind.mainGetBuildinOption(key: kOptionHideHelpCards) == 'Y') return null;
+    return NnuPortableInstallCard(
+      description: bind.isOutgoingOnly() ? '' : translate('install_tip'),
+      installLabel: translate('Install'),
+      install: () async {
+        final result = await bind.mainGetCommon(key: 'nnu-install-portable');
+        if (result == 'installed' && mounted) setState(() {});
+        return result;
+      },
     );
   }
 
@@ -428,7 +483,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   Widget buildHelpCards(String updateUrl) {
-    if (!bind.isCustomClient() &&
+    if (!isWindows && !isLinux && !bind.isCustomClient() &&
         updateUrl.isNotEmpty &&
         !isCardClosed &&
         bind.mainUriPrefixSync().contains('rustdesk')) {
@@ -460,12 +515,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
     if (isWindows && !bind.isDisableInstallation()) {
       if (!bind.mainIsInstalled()) {
-        return buildInstallCard(
-            "", bind.isOutgoingOnly() ? "" : "install_tip", "Install",
-            () async {
-          await rustDeskWinManager.closeAllSubWindows();
-          bind.mainGotoInstall();
-        });
+        if (!bind.isIncomingOnly()) return const SizedBox.shrink();
+        return _portableInstallNotice() ?? const SizedBox.shrink();
       } else if (bind.mainIsInstalledLowerVersion()) {
         return buildInstallCard(
             "Status", "Your installation is lower version.", "Click to upgrade",
@@ -480,6 +531,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         return buildInstallCard("Permissions", "config_screen", "Configure",
             () async {
           bind.mainIsCanScreenRecording(prompt: true);
+          // macOS shows the request prompt only once per app, so later
+          // presses would do nothing without opening the settings pane.
+          launchUrl(Uri.parse(
+              'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'));
           watchIsCanScreenRecording = true;
         }, help: 'Help', link: translate("doc_mac_permission"));
       } else if (!isOutgoingOnly && !bind.mainIsProcessTrusted(prompt: false)) {
@@ -557,7 +612,11 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       return Align(
         alignment: Alignment.centerRight,
         child: OutlinedButton(
-          onPressed: () {
+          onPressed: () async {
+            if (isWindows &&
+                await bind.mainGetCommon(key: 'nnu-authorize-exit') != 'true') {
+              return;
+            }
             SystemNavigator.pop(); // Close the application
             // https://github.com/flutter/flutter/issues/66631
             if (isWindows) {
@@ -800,6 +859,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           password: call.arguments['password'],
           forceRelay: call.arguments['forceRelay'],
           connToken: call.arguments['connToken'],
+          loginMethod: call.arguments['loginMethod'] ?? '',
         );
       } else if (call.method == kWindowBumpMouse) {
         return RdPlatformChannel.instance.bumpMouse(
@@ -857,7 +917,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       return;
     }
     if (renderObject is RenderBox) {
-      final size = renderObject.size;
+      final size = renderObject.size + Offset(0, isWindows ? 56 : 0);
       if (size != imcomingOnlyHomeSize) {
         imcomingOnlyHomeSize = size;
         windowManager.setSize(getIncomingOnlyHomeSize());

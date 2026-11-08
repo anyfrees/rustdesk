@@ -69,6 +69,9 @@ pub mod log {
 #[path = "../../src/nnu.rs"]
 mod nnu;
 
+#[path = "../../src/nnu_history_files.rs"]
+mod nnu_history_files;
+
 #[test]
 fn portable_first_start_preserves_user_choices_and_installed_devices() {
     use config::Config;
@@ -78,6 +81,9 @@ fn portable_first_start_preserves_user_choices_and_installed_devices() {
     assert_eq!(defaults.get("relay-server").unwrap(), "rd.nnu.cn:22222");
     assert_eq!(defaults.get("api-server").unwrap(), "https://rd.nnu.cn");
     assert_eq!(defaults.get("allow-auto-update").unwrap(), "N");
+    assert_eq!(defaults.get("nnu-auto-update").unwrap(), "Y");
+    assert_eq!(defaults.get("direct-server").unwrap(), "Y");
+    assert!(!config::OVERWRITE_SETTINGS.read().unwrap().contains_key("direct-server"));
     assert_eq!(defaults.get("allow-websocket").unwrap(), "N");
     assert_eq!(
         config::OVERWRITE_SETTINGS
@@ -151,4 +157,22 @@ fn api_tokens_are_withheld_only_from_the_configured_legacy_oss_server() {
         nnu::rendezvous_token("rd.nnu.cn.evil.test:21116", "137858006", token),
         token
     );
+}
+
+#[test]
+fn legacy_access_key_uses_pinned_signer_only_for_nnu_peers() {
+    let public_key = "LDreH+COXYXaGqA6YwCFpiZ/xw3l8mWk5YI03axe34o=";
+    assert_eq!(nnu::legacy_peer_signing_key("rd.nnu.cn:21116", "137858006"), Some(public_key));
+    assert_eq!(nnu::legacy_peer_signing_key("RD.0VK.COM", "137858006"), Some(public_key));
+    for host in ["other.example:21116", "rd.nnu.cn.evil.test:21116", "rd.nnu.cn:21118"] {
+        assert_eq!(nnu::legacy_peer_signing_key(host, "137858006"), None);
+    }
+    assert_eq!(nnu::legacy_peer_signing_key("rd.nnu.cn:21116", "user-supplied-key"), None);
+}
+
+#[test]
+fn custom_id_proof_binds_both_names_device_and_time() {
+    let message = nnu::id_change_message("123456789", "nnu-pc01", b"device", 1700000000);
+    assert_eq!(message, vec![78, 78, 85, 45, 73, 68, 45, 67, 72, 65, 78, 71, 69, 45, 86, 49, 0, 9, 0, 0, 0, 49, 50, 51, 52, 53, 54, 55, 56, 57, 8, 0, 0, 0, 110, 110, 117, 45, 112, 99, 48, 49, 6, 0, 0, 0, 100, 101, 118, 105, 99, 101, 0, 241, 83, 101, 0, 0, 0, 0]);
+    assert_ne!(message, nnu::id_change_message("123456789", "nnu-pc02", b"device", 1700000000));
 }

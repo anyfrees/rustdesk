@@ -75,6 +75,24 @@ fn severe_delay_and_timeout_bypass_bitrate_cooldown() {
 }
 
 #[test]
+fn adaptive_network_reduces_bitrate_on_a_second_of_excess_but_ignores_ordinary_jitter() {
+    for adaptive in [false, true] {
+        let mut qos = abr_session();
+        qos.adaptive_network = adaptive;
+        let ratio = qos.ratio();
+        qos.user_network_delay(1, 400);
+        assert_eq!(qos.ratio(), ratio);
+        qos.user_network_delay(1, 10);
+        qos.user_network_delay(1, 1_700);
+        if adaptive {
+            assert!(qos.ratio() < ratio);
+        } else {
+            assert_eq!(qos.ratio(), ratio);
+        }
+    }
+}
+
+#[test]
 fn minimum_bitrate_during_cooldown_does_not_block_fps_reduction() {
     // ABR on, ratio at its floor, a good reply cleared the post-reduction counter,
     // and the adjustment cooldown has just restarted: bitrate cannot help here.

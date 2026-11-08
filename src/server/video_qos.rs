@@ -214,18 +214,21 @@ impl UserDelay {
         }
     }
 
-    // Bitrate is cut on confirmation only: two bad replies in a row, or a probe still
-    // outstanding at the second tick past two seconds.  One slow reply or one short
-    // stall is jitter, and a static screen would never earn the cut back.
-    fn needs_bitrate_reduction(&self) -> bool {
+    // Ordinary jitter still needs confirmation. Adaptive mode also brakes on a full
+    // second of excess delay, before waiting for another delayed probe to return.
+    fn needs_bitrate_reduction(&self, adaptive_network: bool) -> bool {
         self.consecutive_bad_samples >= 2 || self.stall_ticks >= 2
+            || (adaptive_network && self.consecutive_bad_samples > 0
+                && self.delay_history.back().map_or(false, |delay| {
+                    delay.saturating_sub(self.rtt_calculator.get_rtt().unwrap_or_default()) >= 1000
+                }))
     }
 
     // The bitrate step this viewer's own evidence calls for, None when it calls for
     // none.  Severity and confirmation come from the same viewer; the controller
     // never pairs one viewer's spike with another viewer's confirmation.
-    fn ratio_reduction(&self) -> Option<f32> {
-        if !self.needs_bitrate_reduction() {
+    fn ratio_reduction(&self, adaptive_network: bool) -> Option<f32> {
+        if !self.needs_bitrate_reduction(adaptive_network) {
             return None;
         }
         let excess = self.avg_delay();
@@ -296,6 +299,7 @@ pub struct VideoQoS {
     bitrate_store: u32,
     adjust_ratio_instant: Instant,
     abr_config: bool,
+    adaptive_network: bool,
     first_reply_adjusts_ratio: bool, // false on Linux, where it can create vaapi twice
     #[cfg(test)]
     test_now: Option<Instant>,
@@ -311,6 +315,7 @@ impl Default for VideoQoS {
             bitrate_store: 0,
             adjust_ratio_instant: Instant::now(),
             abr_config: true,
+            adaptive_network: false,
             first_reply_adjusts_ratio: !cfg!(target_os = "linux"),
             #[cfg(test)]
             test_now: None,
@@ -400,6 +405,7 @@ impl VideoQoS {
         };
         self.users.insert(id, user);
         self.abr_config = Config::get_option("enable-abr") != "N";
+        self.adaptive_network = Config::get_option("nnu-network-adaptation") == "Y";
     }
 
     // Clean up user session
@@ -564,7 +570,7 @@ impl VideoQoS {
                 .delay
                 .accelerate_startup(current_fps, fps, user_cap, delay, braked);
             reduce_bitrate = bitrate_first
-                && user.delay.needs_bitrate_reduction()
+                && user.delay.needs_bitrate_reduction(self.adaptive_network)
                 && user.delay.replies_after_bitrate_reduction.is_none();
             fps = fps.clamp(MIN_FPS, user_cap);
             // first network delay message
@@ -742,7 +748,7 @@ impl VideoQoS {
         let reduction = self
             .users
             .values()
-            .filter_map(|u| u.delay.ratio_reduction())
+            .filter_map(|u| u.delay.ratio_reduction(self.adaptive_network))
             .reduce(f32::min);
         if reduction.is_none() && max_delay >= DELAY_THRESHOLD_150MS {
             // Elevated but unconfirmed: no change, and no cooldown either, so a
@@ -796,7 +802,7 @@ impl VideoQoS {
 
         if reduction.is_some() {
             for user in self.users.values_mut() {
-                if user.delay.needs_bitrate_reduction()
+                if user.delay.needs_bitrate_reduction(self.adaptive_network)
                     && user.delay.replies_after_bitrate_reduction.is_none()
                 {
                     // One outstanding probe may have started before the bitrate change.

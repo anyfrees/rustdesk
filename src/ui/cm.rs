@@ -84,7 +84,8 @@ impl SciterHandler {
     }
 }
 
-pub struct SciterConnectionManager(ConnectionManager<SciterHandler>);
+pub struct SciterConnectionManager(ConnectionManager<SciterHandler>,
+    #[cfg(windows)] super::nnu_cm::Frame);
 
 impl Deref for SciterConnectionManager {
     type Target = ConnectionManager<SciterHandler>;
@@ -103,7 +104,7 @@ impl SciterConnectionManager {
         };
         let cloned = cm.clone();
         std::thread::spawn(move || start_ipc(cloned));
-        SciterConnectionManager(cm)
+        SciterConnectionManager(cm, #[cfg(windows)] Default::default())
     }
 
     fn get_icon(&mut self) -> String {
@@ -166,6 +167,59 @@ impl SciterConnectionManager {
         *crate::ui::cm::HIDE_CM.lock().unwrap()
     }
 
+    fn nnu_clients(&self) -> String {
+        #[cfg(windows)]
+        return crate::ui_cm_interface::get_clients_state();
+        #[cfg(not(windows))]
+        "[]".to_owned()
+    }
+
+    fn nnu_layout(&mut self, mode: i32) -> bool {
+        #[cfg(windows)]
+        {
+            let window=self.ui_handler.element.lock().unwrap().as_ref().map(|root|root.get_hwnd(true));
+            if let Some(window)=window { return self.1.layout(window as _,mode); }
+        }
+        false
+    }
+
+    fn nnu_drag(&mut self) -> bool {
+        #[cfg(windows)]
+        {
+            let window=self.ui_handler.element.lock().unwrap().as_ref().map(|root|root.get_hwnd(true));
+            if let Some(window)=window { return self.1.drag(window as _); }
+        }
+        false
+    }
+
+    fn nnu_motion(&self) -> bool {
+        #[cfg(windows)]
+        return super::nnu_cm::Frame::motion_allowed();
+        #[cfg(not(windows))]
+        false
+    }
+
+    fn nnu_glass(&self) -> bool {
+        #[cfg(windows)]
+        return super::nnu_cm::Frame::glass_supported();
+        #[cfg(not(windows))]
+        false
+    }
+
+    fn nnu_transfer(&self,id:i32)->bool {
+        let clients:Vec<serde_json::Value> = match serde_json::from_str(&self.nnu_clients()) {
+            Ok(clients)=>clients,
+            Err(error)=>{ log::warn!("Could not read the certified file transfer state: {error}");return false; }
+        };
+        let Some(client)=clients.into_iter().find(|client|client["id"].as_i64()==Some(id as i64) && client["authorized"].as_bool()==Some(true) && client["disconnected"].as_bool()==Some(false)) else { return false; };
+        if client["file"].as_bool()!=Some(true) || hbb_common::config::is_incoming_only() || !client["official_support"].is_object() || client["official_support"]["peer_platform"].as_str().is_some_and(|platform|platform.eq_ignore_ascii_case("ios")) { return false; }
+        let Some(peer)=client["peer_id"].as_str() else { return false; };
+        match crate::run_me(vec!["--file-transfer",peer]) {
+            Ok(_)=>true,
+            Err(error)=>{ log::warn!("Could not open certified file transfer: {error}");false }
+        }
+    }
+
     fn get_supported_privacy_mode_impls(&self) -> String {
         serde_json::to_string(&crate::privacy_mode::get_supported_privacy_mode_impl())
             .unwrap_or_default()
@@ -174,6 +228,8 @@ impl SciterConnectionManager {
 
 impl sciter::EventHandler for SciterConnectionManager {
     fn attached(&mut self, root: HELEMENT) {
+        #[cfg(windows)]
+        super::nnu_cm::load_font();
         *self.ui_handler.element.lock().unwrap() = Some(Element::from(root));
     }
 
@@ -193,6 +249,12 @@ impl sciter::EventHandler for SciterConnectionManager {
         fn get_option(String);
         fn get_builtin_option(String);
         fn hide_cm();
+        fn nnu_clients();
+        fn nnu_layout(i32);
+        fn nnu_drag();
+        fn nnu_motion();
+        fn nnu_glass();
+        fn nnu_transfer(i32);
         fn get_supported_privacy_mode_impls();
     }
 }

@@ -9,8 +9,9 @@ import 'package:flutter_hbb/common/widgets/connection_page_title.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
 import 'package:flutter_hbb/desktop/widgets/nnu_support.dart';
-import 'package:flutter_hbb/desktop/widgets/nnu_update_button.dart';
-import 'package:flutter_hbb/utils/multi_window_manager.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_announcement.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_portable_install.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_direct_voice_call.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -21,6 +22,7 @@ import '../../common.dart';
 import '../../common/formatter/id_formatter.dart';
 import '../../common/widgets/peer_tab_page.dart';
 import '../../common/widgets/autocomplete.dart';
+import '../../common/widgets/request_approval_menu.dart';
 import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 
@@ -192,7 +194,9 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget {
-  const ConnectionPage({Key? key}) : super(key: key);
+  const ConnectionPage({Key? key, this.installationNotice}) : super(key: key);
+
+  final Widget? installationNotice;
 
   @override
   State<ConnectionPage> createState() => _ConnectionPageState();
@@ -320,7 +324,13 @@ class _ConnectionPageState extends State<ConnectionPage>
     return Column(
       children: [
         Expanded(
-            child: Column(
+            child: widget.installationNotice != null
+                ? NnuPortableConnectionBody(
+                    connection: _buildRemoteIDTextField(context),
+                    notice: widget.installationNotice!,
+                    peers: PeerTabPage(),
+                  ).paddingOnly(left: 12.0)
+                : Column(
           children: [
             Row(
               children: [
@@ -332,15 +342,10 @@ class _ConnectionPageState extends State<ConnectionPage>
             Expanded(child: PeerTabPage()),
           ],
         ).paddingOnly(left: 12.0)),
+        const NnuAnnouncementFeed(),
         Obx(() => NnuSupportFooter(
           status: isOutgoingOnly ? null : const OnlineStatusWidget(),
           showNotice: _showNnuNotice,
-          updateAction: !isWindows ? null : NnuUpdateButton(
-            installed: bind.mainIsInstalled(),
-            installedPackageName: () => bind.mainGetCommonSync(key: 'download-file-1.5.0'),
-            hasActiveSession: () => stateGlobal.videoConnCount.value > 0 ||
-                rustDeskWinManager.getActiveWindows().any((id) => id != kMainWindowId),
-          ),
           connectionUnavailable: !Get.find<RxBool>(tag: 'stop-service').value &&
               stateGlobal.svcStatus.value == SvcStatus.notReady,
           onContactSupport: () => launchUrlString(
@@ -367,6 +372,47 @@ class _ConnectionPageState extends State<ConnectionPage>
         isViewCamera: isViewCamera,
         isTerminal: isTerminal,
         isTcpTunneling: isTcpTunneling);
+  }
+
+  void onVoiceCall() {
+    final id = _idController.id.trim();
+    if (id.isEmpty) {
+      _idFocusNode.requestFocus();
+      return;
+    }
+    nnuStartDirectVoiceCall(context, id, id);
+  }
+
+  RequestApprovalMenu _requestApprovalMenu(BuildContext context) {
+    MenuEntryButton<String> action(String title,
+            {bool isFileTransfer = false,
+            bool isViewCamera = false,
+            bool isTerminal = false,
+            bool isTcpTunneling = false}) =>
+        MenuEntryButton<String>(
+          childBuilder: (style) => Text(translate(title), style: style),
+          proc: () => connect(context, _idController.id,
+              loginMethod: 'request-approval',
+              isFileTransfer: isFileTransfer,
+              isViewCamera: isViewCamera,
+              isTerminal: isTerminal,
+              isTcpTunneling: isTcpTunneling),
+          padding: EdgeInsets.symmetric(horizontal: kDesktopMenuPadding.left),
+          dismissOnClicked: true,
+        );
+
+    return RequestApprovalMenu(
+      title: translate('Request approval'),
+      padding: EdgeInsets.symmetric(horizontal: kDesktopMenuPadding.left),
+      arrowScale: MenuConfig.iconScale,
+      entries: [
+        action('Connect'),
+        action('Transfer file', isFileTransfer: true),
+        action('View camera', isViewCamera: true),
+        action('${translate('Terminal')} (beta)', isTerminal: true),
+        if (isDesktop) action('TCP tunneling', isTcpTunneling: true),
+      ],
+    );
   }
 
   /// UI for the remote ID TextField.
@@ -587,6 +633,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                                   context: context,
                                   position: RelativeRect.fromLTRB(x, y, x, y),
                                   items: [
+                                    if (isWindows) ('语音呼叫', onVoiceCall),
                                     (
                                       'Transfer file',
                                       () => onConnect(isFileTransfer: true)
@@ -608,7 +655,8 @@ class _ConnectionPageState extends State<ConnectionPage>
                                         () => onConnect(isTcpTunneling: true)
                                       ),
                                   ]
-                                      .map((e) => MenuEntryButton<String>(
+                                      .map<MenuEntryBase<String>>(
+                                          (e) => MenuEntryButton<String>(
                                             childBuilder: (TextStyle? style) =>
                                                 Text(
                                               translate(e.$1),
@@ -620,6 +668,10 @@ class _ConnectionPageState extends State<ConnectionPage>
                                                     kDesktopMenuPadding.left),
                                             dismissOnClicked: true,
                                           ))
+                                      .followedBy([
+                                        MenuEntryDivider<String>(),
+                                        _requestApprovalMenu(context),
+                                      ])
                                       .map((e) => e.build(
                                           context,
                                           const MenuConfig(

@@ -17,6 +17,8 @@ use crate::ui_session_interface::Session;
 use crate::{common::get_app_name, ipc, ui_interface::*};
 
 mod cm;
+#[cfg(windows)]
+mod nnu_cm;
 #[cfg(feature = "inline")]
 pub mod inline;
 pub mod remote;
@@ -183,6 +185,16 @@ pub fn start(args: &mut [String]) {
             .unwrap_or("".to_owned()),
         page
     ));
+    #[cfg(windows)]
+    if args.first().is_some_and(|argument| argument == "--cm") {
+        frame.run_loop();
+        return;
+    }
+    #[cfg(windows)]
+    if args.is_empty() && crate::platform::nnu_update_window::apply_startup(frame.get_hwnd() as _) {
+        frame.run_loop();
+        return;
+    }
     let hide_cm = *cm::HIDE_CM.lock().unwrap();
     if !args.is_empty() && args[0] == "--cm" && hide_cm {
         // run_app calls expand(show) + run_loop, we use collapse(hide) + run_loop instead to create a hidden window
@@ -234,6 +246,20 @@ impl UI {
 
     fn goto_install(&mut self) {
         goto_install();
+    }
+
+    fn nnu_install(&self) -> String {
+        #[cfg(windows)]
+        return crate::platform::nnu_install::start();
+        #[cfg(not(windows))]
+        "disabled".to_owned()
+    }
+
+    fn nnu_install_status(&self) -> String {
+        #[cfg(windows)]
+        return crate::platform::nnu_install::status();
+        #[cfg(not(windows))]
+        "disabled".to_owned()
     }
 
     fn install_me(&mut self, _options: String, _path: String) {
@@ -768,6 +794,8 @@ impl sciter::EventHandler for UI {
         fn install_path();
         fn install_options();
         fn goto_install();
+        fn nnu_install();
+        fn nnu_install_status();
         fn is_process_trusted(bool);
         fn is_can_screen_recording(bool);
         fn is_installed_daemon(bool);

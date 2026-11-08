@@ -2,6 +2,8 @@ body {
     behavior: connection-manager;
 }
 
+@import url(nnu_cm.css);
+
 div.content {
     flow: horizontal;
     size: *;

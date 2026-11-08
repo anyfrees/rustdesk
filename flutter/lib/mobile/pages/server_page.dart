@@ -10,9 +10,11 @@ import 'package:provider/provider.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
+import '../../common/widgets/nnu_official_support_profile.dart';
 import '../../consts.dart';
 import '../../models/platform_model.dart';
 import '../../models/server_model.dart';
+import '../../utils/android_documents.dart';
 import 'home_page.dart';
 
 class ServerPage extends StatefulWidget implements PageShape {
@@ -573,6 +575,44 @@ class PermissionChecker extends StatefulWidget {
 }
 
 class _PermissionCheckerState extends State<PermissionChecker> {
+  static const _folderOptionIndent = 16.0;
+
+  Future<void> _selectFolder() async {
+    try {
+      final workspace = await gFFI.dialogManager.show<bool>(
+          (_, close, __) => CustomAlertDialog(
+                title: Text(translate('Change Path')),
+                content: Column(mainAxisSize: MainAxisSize.min, children: [
+                  ListTile(
+                    title: Text(translate('RustDesk storage')),
+                    onTap: () => close(true),
+                  ),
+                  ListTile(
+                    title: Text('${translate('Other folders')}…'),
+                    onTap: () => close(false),
+                  ),
+                ]),
+              ),
+          backDismiss: true,
+          clickMaskDismiss: true);
+      if (workspace == null) return;
+      if (workspace) {
+        showToast(await AndroidDocuments.workspace(share: true));
+        await bind.setLocalFlutterOption(
+            k: 'android-file-transfer-folder-setup', v: 'Y');
+        return;
+      }
+      final selected = await AndroidDocuments.selectFolder(share: true);
+      if (selected != null) {
+        await bind.setLocalFlutterOption(
+            k: 'android-file-transfer-folder-setup', v: 'Y');
+        showToast(AndroidDocuments.displayPath(selected['path'] as String));
+      }
+    } catch (error) {
+      showToast(error.toString());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
@@ -620,6 +660,19 @@ class _PermissionCheckerState extends State<PermissionChecker> {
             serverModel.toggleFile,
             enabled: !permissionChangeLocked,
           ),
+          if (isAndroid &&
+              !bind.isDisableSettings() &&
+              !bind.isOutgoingOnly() &&
+              bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
+            ListTile(
+              dense: true,
+              contentPadding:
+                  const EdgeInsetsDirectional.only(start: _folderOptionIndent),
+              title: Text(translate('Change Path')),
+              trailing: const Icon(Icons.chevron_right),
+              enabled: !permissionChangeLocked,
+              onTap: _selectFolder,
+            ),
           hasAudioPermission
               ? PermissionRow(translate("Audio Capture"), serverModel.audioOk,
                   serverModel.toggleAudio,
@@ -854,27 +907,30 @@ class ClientInfo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final identity = client.officialSupport;
     return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(children: [
-          Row(
-            children: [
-              Expanded(
-                  flex: -1,
-                  child: Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: _buildAvatar(context))),
-              Expanded(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: identity == null
+          ? Row(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: _buildAvatar(context),
+                ),
+                Expanded(
                   child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(client.name, style: const TextStyle(fontSize: 18)),
-                    const SizedBox(width: 8),
-                    Text(client.peerId, style: const TextStyle(fontSize: 10))
-                  ]))
-            ],
-          ),
-        ]));
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(client.name, style: const TextStyle(fontSize: 18)),
+                      const SizedBox(width: 8),
+                      Text(client.peerId, style: const TextStyle(fontSize: 10)),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : NnuOfficialSupportProfile(identity, peerId: client.peerId),
+    );
   }
 
   Widget _buildAvatar(BuildContext context) {

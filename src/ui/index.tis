@@ -21,10 +21,11 @@ const disable_change_permanent_password = handler.get_builtin_option("disable-ch
 const disable_change_id = handler.get_builtin_option("disable-change-id") == "Y";
 
 // html min-width, min-height not working on mac, below works for all
+// Sciter applies Windows DPI scaling to these minimum dimensions.
 if (incoming_only) {
-  view.windowMinSize = (scaleIt(incoming_only_width), scaleIt((handler.is_installed() || disable_installation) ? 300 : 390));
+  view.windowMinSize = (incoming_only_width, (handler.is_installed() || disable_installation) ? 300 : 390);
 } else {
-  view.windowMinSize = (scaleIt(560), scaleIt(300));
+  view.windowMinSize = (560, 300);
 }
 
 var app;
@@ -727,7 +728,7 @@ class App: Reactor.Component
                         </div>}
                         {!outgoing_only && <PasswordArea />}
                     </div>
-                    {(!is_win || handler.is_installed() || disable_installation) ? "" : <InstallMe />}
+                    {(!incoming_only || !is_win || handler.is_installed() || disable_installation) ? "" : <InstallMe />}
                     {software_update_url && !disable_installation ? <UpdateMe /> : ""}
                     {is_win && handler.is_installed() && !software_update_url && handler.is_installed_lower_version() && !disable_installation ? <UpgradeMe /> : ""}
                     {is_can_screen_recording ? "": <CanScreenRecording />}
@@ -740,6 +741,7 @@ class App: Reactor.Component
                 </div>
                 {!incoming_only && <div .right-pane>
                     <div .right-content>
+                        <div .nnu-connect-install>
                         <div .card-connect>
                             <div .title>{translate('Control Remote Desktop')}</div>
                             <ID @{this.remote_id} />
@@ -747,6 +749,8 @@ class App: Reactor.Component
                                 <button .button .outline #file-transfer>{translate('Transfer file')}</button>
                                 <button .button #connect>{translate('Connect')}</button>
                             </div>
+                        </div>
+                        {(!is_win || handler.is_installed() || disable_installation) ? "" : <InstallMe />}
                         </div>
                         <MultipleSessions @{this.multipleSessions} />
                     </div>
@@ -769,17 +773,29 @@ class App: Reactor.Component
     }
 }
 
+var nnu_install_state = "";
+function nnuPollInstall() {
+    nnu_install_state=handler.nnu_install_status();
+    app.update();
+    if(nnu_install_state=="installing") self.timer(250ms,nnuPollInstall);
+}
 class InstallMe: Reactor.Component {
     function render() {
         return <div .install-me>
             <span />
             <div>{translate('install_tip')}</div>
-            <div><button #install-me .button>{translate('Install')}</button></div>
+            <div><button #install-me .button disabled={nnu_install_state=="installing" ? true : false}>{nnu_install_state=="installing" ? "正在安装…" : translate('Install')}</button></div>
+            {nnu_install_state=="failed" ? <div .nnu-install-result>安装未完成或已取消授权，请重试。</div> : ""}
+            {nnu_install_state=="busy" ? <div .nnu-install-result>远程连接中，请结束连接后再安装。</div> : ""}
+            {nnu_install_state=="disabled" ? <div .nnu-install-result>此客户端已禁用安装。</div> : ""}
         </div>;
     }
 
     event click $(#install-me) {
-        handler.goto_install();
+        if(nnu_install_state=="installing") return;
+        nnu_install_state=handler.nnu_install();
+        app.update();
+        if(nnu_install_state=="installing") self.timer(250ms,nnuPollInstall);
     }
 }
 

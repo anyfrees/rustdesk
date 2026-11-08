@@ -19,6 +19,9 @@
 		<CustomAction Id="TryStopDeleteService.SetParam" Return="check" Property="TryStopDeleteService" Value="$(var.Product)" />
 
 		<CustomAction Id="LaunchApp" ExeCommand="" Return="asyncNoWait" FileRef="App.exe" />
+		<Property Id="NNU_UPDATE_WINDOW" Secure="yes" />
+		<CustomAction Id="LaunchRestoredApp" ExeCommand="--nnu-update-window=[NNU_UPDATE_WINDOW]" Return="asyncNoWait" FileRef="App.exe" />
+		<CustomAction Id="NnuAuthorizeUninstall" DllEntry="NnuAuthorizeUninstall" Execute="immediate" Return="check" Impersonate="yes" BinaryRef="Custom_Actions_Dll" />
 		<CustomAction Id="LaunchAppTray" ExeCommand=" --tray" Return="asyncNoWait" FileRef="App.exe" />
 		<Property Id="TerminateProcesses" Value="AppTest.exe" />
 		<CustomAction Id="TerminateProcesses.SetParam" Return="check" Property="TerminateProcesses" Value="$(var.Product).exe" />
@@ -39,6 +42,9 @@
 		<CustomAction Id="InstallPrinter.SetParam" Return="check" Property="InstallPrinter" Value="[ProductName]|[INSTALLFOLDER_INNER]" />
 		<CustomAction Id="UninstallPrinter.SetParam" Return="check" Property="UninstallPrinter" Value="[ProductName]" />
 		<InstallExecuteSequence>
+			<!-- Major upgrades remove the previous package through UPGRADINGPRODUCTCODE;
+			     only a standalone uninstall prompts for the teaching PIN. -->
+			<Custom Action="NnuAuthorizeUninstall" Before="InstallInitialize" Condition="Installed AND REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
 
 			<Custom Action="SetPropertyIsServiceRunning" After="InstallInitialize" Condition="Installed" />
 			<Custom Action="SetPropertyIsServiceRunning.SetParam.AppName" Before="SetPropertyIsServiceRunning" Condition="Installed" />
@@ -62,7 +68,8 @@
 
 			<!-- Launch ClientLauncher if installing or already installed and not uninstalling -->
 			<!-- https://learn.microsoft.com/en-us/windows/win32/msi/uilevel -->
-			<Custom Action="LaunchApp" After="InstallFinalize" Condition="(NOT UILevel=2) AND (NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE)) "/>
+			<Custom Action="LaunchApp" After="InstallFinalize" Condition="(NOT UILevel=2) AND (NOT NNU_UPDATE_WINDOW) AND (NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE)) "/>
+			<Custom Action="LaunchRestoredApp" After="InstallFinalize" Condition="(NNU_UPDATE_WINDOW=&quot;normal&quot; OR NNU_UPDATE_WINDOW=&quot;minimized&quot; OR NNU_UPDATE_WINDOW=&quot;maximized&quot;) AND (NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE))"/>
 			<Custom Action="LaunchAppTray" After="InstallFinalize" Condition="(LAUNCH_TRAY_APP=&quot;Y&quot; OR LAUNCH_TRAY_APP=&quot;1&quot;) AND (NOT (Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE)) AND (NOT STOP_SERVICE=&quot;&apos;Y&apos;&quot;) AND (NOT CC_CONNECTION_TYPE=&quot;outgoing&quot;)"/>
 
 			<!-- https://learn.microsoft.com/en-us/windows/win32/msi/operating-system-property-values -->

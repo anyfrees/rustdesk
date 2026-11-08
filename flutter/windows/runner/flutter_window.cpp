@@ -13,11 +13,15 @@
 #include <flutter/standard_method_codec.h>
 
 #include <windows.h>
+#include <dwmapi.h>
+
+#pragma comment(lib, "dwmapi.lib")
 
 #include <optional>
 #include <memory>
 
 #include "win32_desktop.h"
+#include "nnu_voice_tone.h"
 
 namespace {
 
@@ -110,8 +114,80 @@ bool FlutterWindow::OnCreate() {
     &flutter::StandardMethodCodec::GetInstance());
 
   channel.SetMethodCallHandler(
-    [](const flutter::MethodCall<>& call, std::unique_ptr<flutter::MethodResult<>> result) {
-      if (call.method_name() == "bumpMouse") {
+    [this](const flutter::MethodCall<>& call, std::unique_ptr<flutter::MethodResult<>> result) {
+      if (call.method_name() == "getVoiceCallSoundEnabled") {
+        result->Success(flutter::EncodableValue(nnu::VoiceSoundEnabled()));
+      } else if (call.method_name() == "setVoiceCallSoundEnabled") {
+        const auto* value = call.arguments() ? std::get_if<bool>(call.arguments()) : nullptr;
+        if (!value) { result->Error("invalid_argument"); return; }
+        const auto status = nnu::SetVoiceSoundEnabled(*value);
+        if (status != ERROR_SUCCESS) { result->Error("preference_write_failed"); return; }
+        if (!*value) nnu::StopVoiceTone();
+        result->Success();
+      } else if (call.method_name() == "playVoiceCallTone") {
+        const auto* mode = call.arguments() ? std::get_if<int32_t>(call.arguments()) : nullptr;
+        if (!mode || *mode < 0 || *mode > 2) { result->Error("invalid_argument"); return; }
+        result->Success(flutter::EncodableValue(nnu::PlayVoiceTone(*mode)));
+      } else if (call.method_name() == "setTrustedMessageShape") {
+        const auto* argument = call.arguments();
+        const auto* values = argument ? std::get_if<flutter::EncodableMap>(argument) : nullptr;
+        if (!values) {
+          result->Error("invalid_argument");
+          return;
+        }
+        const auto mode_it = values->find(flutter::EncodableValue("mode"));
+        const auto height_it = values->find(flutter::EncodableValue("height"));
+        const auto* mode = mode_it == values->end() ? nullptr : std::get_if<int32_t>(&mode_it->second);
+        const auto* height = height_it == values->end() ? nullptr : std::get_if<double>(&height_it->second);
+        if (!mode || (*mode != 4 && *mode != 5) || !height ||
+            !std::isfinite(*height) || *height < 34 || *height > 76) {
+          result->Error("invalid_argument");
+          return;
+        }
+        trusted_frame_.SetMessage(GetHandle(), *mode, *height);
+        result->Success();
+      } else if (call.method_name() == "setTrustedWindowShape") {
+        const auto* argument = call.arguments();
+        const auto* mode = argument ? std::get_if<int32_t>(argument) : nullptr;
+        if (!mode || *mode < 1 || *mode > 6) {
+          result->Error("invalid_argument");
+          return;
+        }
+        trusted_frame_.SetMode(GetHandle(), *mode);
+        if (*mode == 1) {
+          // The resized prompt must not present the CM's previous tall surface.
+          ForceChildRefresh(flutter_controller_->view()->GetNativeWindow());
+        }
+        result->Success();
+      } else if (call.method_name() == "setTrustedRequestFrame") {
+        const auto* argument = call.arguments();
+        const auto* enabled = argument ? std::get_if<bool>(argument) : nullptr;
+        if (!enabled) {
+          result->Error("invalid_argument");
+          return;
+        }
+        // DWM can paint a focus outline even when the client area is frameless.
+        constexpr DWORD kBorderColor = 34;
+        const COLORREF color = *enabled ? 0xFFFFFFFE : 0xFFFFFFFF;
+        DwmSetWindowAttribute(GetHandle(), kBorderColor, &color, sizeof(color));
+        LONG_PTR style = GetWindowLongPtr(GetHandle(), GWL_STYLE);
+        if (*enabled) {
+          if (!trusted_frame_style_) {
+            trusted_frame_style_ = style & WS_OVERLAPPEDWINDOW;
+          }
+          style &= ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW);
+        } else if (trusted_frame_style_) {
+          trusted_frame_.Reset(GetHandle());
+          style = (style & ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW)) |
+                  *trusted_frame_style_;
+          trusted_frame_style_.reset();
+        }
+        SetWindowLongPtr(GetHandle(), GWL_STYLE, style);
+        SetWindowPos(GetHandle(), nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        result->Success();
+      } else if (call.method_name() == "bumpMouse") {
         auto arguments = call.arguments();
 
         int dx = 0, dy = 0;
@@ -165,6 +241,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  nnu::StopVoiceTone();
   KillTimer(GetHandle(), kForceRedrawTimerId);
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
@@ -177,6 +254,10 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_SIZE || message == WM_DWMCOMPOSITIONCHANGED ||
+      message == WM_DPICHANGED) {
+    trusted_frame_.Refresh(hwnd);
+  }
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

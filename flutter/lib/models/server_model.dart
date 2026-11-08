@@ -14,7 +14,10 @@ import '../common.dart';
 import '../common/formatter/id_formatter.dart';
 import '../desktop/pages/server_page.dart' as desktop;
 import '../desktop/widgets/tabbar_widget.dart';
+import '../desktop/widgets/nnu_password_connection.dart';
 import '../mobile/pages/server_page.dart';
+import '../mobile/widgets/android_file_transfer_setup.dart';
+import '../utils/android_documents.dart';
 import 'model.dart';
 
 const kLoginDialogTag = "LOGIN";
@@ -84,12 +87,6 @@ class ServerModel with ChangeNotifier {
 
   setVerificationMethod(String method) async {
     await bind.mainSetOption(key: kOptionVerificationMethod, value: method);
-    /*
-    if (method != kUsePermanentPassword) {
-      await bind.mainSetOption(
-          key: 'allow-hide-cm', value: bool2option('allow-hide-cm', false));
-    }
-    */
   }
 
   String get temporaryPasswordLength {
@@ -106,12 +103,10 @@ class ServerModel with ChangeNotifier {
 
   setApproveMode(String mode) async {
     await bind.mainSetOption(key: kOptionApproveMode, value: mode);
-    /*
     if (mode != 'password') {
       await bind.mainSetOption(
           key: 'allow-hide-cm', value: bool2option('allow-hide-cm', false));
     }
-    */
   }
 
   bool get allowNumericOneTimePassword => _allowNumericOneTimePassword;
@@ -125,6 +120,18 @@ class ServerModel with ChangeNotifier {
   TextEditingController get serverPasswd => _serverPasswd;
 
   List<Client> get clients => _clients;
+  Client? get trustedDesktopRequest => approveMode == 'password'
+      ? null
+      : _clients.firstWhereOrNull((client) => client.isTrustedDesktopRequest);
+  Client? get desktopConnectionDock => nnuPasswordConnectionDock(_clients,
+      approveMode: approveMode, hidden: hideCm) ?? trustedDesktopDock;
+
+  Client? get trustedDesktopDock {
+    if (hideCm) return null;
+    final active = _clients.where((client) => !client.disconnected);
+    if (active.length != 1) return null;
+    return active.single.isTrustedDesktopConnected ? active.single : null;
+  }
 
   final controller = ScrollController();
 
@@ -162,7 +169,7 @@ class ServerModel with ChangeNotifier {
           debugPrint("clients not match!");
           updateClientState(res);
         } else {
-          if (_clients.isEmpty) {
+          if (_clients.isEmpty && trustedEndedClient == null) {
             hideCmWindow();
             if (_zeroClientLengthCounter++ == 12) {
               // 6 second
@@ -170,7 +177,7 @@ class ServerModel with ChangeNotifier {
             }
           } else {
             _zeroClientLengthCounter = 0;
-            if (!hideCm) showCmWindow();
+            if (!hideCm || desktopConnectionDock != null || desktopVoiceCall != null) showCmWindow();
           }
         }
       }
@@ -232,14 +239,11 @@ class ServerModel with ChangeNotifier {
     final approveMode = await bind.mainGetOption(key: kOptionApproveMode);
     final numericOneTimePassword =
         await mainGetBoolOption(kOptionAllowNumericOneTimePassword);
-    /*
-    var hideCm = option2bool(
+    var shouldHideCm = option2bool(
         'allow-hide-cm', await bind.mainGetOption(key: 'allow-hide-cm'));
-    if (!(approveMode == 'password' &&
-        verificationMethod == kUsePermanentPassword)) {
-      hideCm = false;
+    if (approveMode != 'password') {
+      shouldHideCm = false;
     }
-    */
     if (_approveMode != approveMode) {
       _approveMode = approveMode;
       update = true;
@@ -274,9 +278,8 @@ class ServerModel with ChangeNotifier {
       _allowNumericOneTimePassword = numericOneTimePassword;
       update = true;
     }
-    /*
-    if (_hideCm != hideCm) {
-      _hideCm = hideCm;
+    if (hideCm != shouldHideCm) {
+      hideCm = shouldHideCm;
       if (desktopType == DesktopType.cm) {
         if (hideCm) {
           await hideCmWindow();
@@ -286,7 +289,6 @@ class ServerModel with ChangeNotifier {
       }
       update = true;
     }
-    */
     if (update) {
       notifyListeners();
     }
@@ -399,6 +401,14 @@ class ServerModel with ChangeNotifier {
         stopService();
       }
     } else {
+      if (isAndroid) {
+        try {
+          await AndroidDocuments.requireLogFolder();
+          await showAndroidFileTransferSetup(gFFI);
+        } catch (_) {
+          debugPrint('Folder setup failed; continuing service startup');
+        }
+      }
       await checkRequestNotificationPermission();
       if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
         await checkFloatingWindowPermission();
@@ -497,12 +507,20 @@ class ServerModel with ChangeNotifier {
     }
 
     final oldClientLenght = _clients.length;
+    final previousDock = desktopConnectionDock?.id;
+    final connectionTimes = {
+      for (final client in _clients) client.id: client.trustedConnectedAt,
+    };
     _clients.clear();
     tabController.state.value.tabs.clear();
 
     for (var clientJson in clientsJson) {
       try {
         final client = Client.fromJson(clientJson);
+        if (client.trustedConnectedAt != null) {
+          client.trustedConnectedAt =
+              connectionTimes[client.id] ?? client.trustedConnectedAt;
+        }
         _clients.add(client);
         _addTab(client);
       } catch (e) {
@@ -516,7 +534,7 @@ class ServerModel with ChangeNotifier {
         showCmWindow();
       }
     }
-    if (_clients.length != oldClientLenght) {
+    if (_clients.length != oldClientLenght || previousDock != desktopConnectionDock?.id) {
       notifyListeners();
       if (isAndroid) androidUpdatekeepScreenOn();
     }
@@ -531,6 +549,11 @@ class ServerModel with ChangeNotifier {
         if (index < 0) {
           _clients.add(client);
         } else {
+          _clients[index].trustedConnectedAt ??= client.trustedConnectedAt;
+          if (approveMode == 'password') {
+            _clients[index].officialSupport = client.officialSupport;
+            _clients[index].name = client.name;
+          }
           if (_clients[index].authorized) {
             _clients[index].privacyMode = client.privacyMode;
             notifyListeners();
@@ -543,6 +566,10 @@ class ServerModel with ChangeNotifier {
         final index = _clients.indexWhere((c) => c.id == client.id);
         if (index >= 0) {
           _clients[index].privacyMode = client.privacyMode;
+          if (approveMode == 'password') {
+            _clients[index].officialSupport = client.officialSupport;
+            _clients[index].name = client.name;
+          }
           notifyListeners();
           return;
         }
@@ -576,12 +603,14 @@ class ServerModel with ChangeNotifier {
         onTap: () {},
         page: desktop.buildConnectionCard(client)));
     Future.delayed(Duration.zero, () async {
-      if (!hideCm) windowOnTop(null);
+      if (!client.nnuVoiceOnly && !hideCm && desktopConnectionDock == null &&
+          desktopVoiceCall == null) windowOnTop(null);
     });
     // Only do the hidden task when on Desktop.
-    if (client.authorized && isDesktop) {
+    if (client.authorized && isDesktop && !client.nnuVoiceOnly) {
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
-        if (!hideCm) windowManager.minimize();
+        if (!hideCm && desktopConnectionDock == null && trustedEndedClient == null &&
+            desktopVoiceCall == null) windowManager.minimize();
         cmHiddenTimer = null;
       });
     }
@@ -674,15 +703,28 @@ class ServerModel with ChangeNotifier {
     });
   }
 
-  void sendLoginResponse(Client client, bool res) async {
+  void sendLoginResponse(Client client, bool res,
+      {bool waitForAuthorization = false}) async {
     if (res) {
+      if (client.canAcceptFullControl) {
+        client.keyboard = true;
+        client.clipboard = true;
+        client.audio = true;
+        client.file = true;
+        client.restart = true;
+        client.recording = true;
+        client.blockInput = true;
+        client.privacyMode = true;
+      }
       bind.cmLoginRes(connId: client.id, res: res);
       if (!client.isFileTransfer && !client.isTerminal) {
         parent.target?.invokeMethod("start_capture");
       }
       parent.target?.invokeMethod("cancel_notification", client.id);
-      client.authorized = true;
-      notifyListeners();
+      if (!waitForAuthorization) {
+        client.authorized = true;
+        notifyListeners();
+      }
     } else {
       bind.cmLoginRes(connId: client.id, res: res);
       parent.target?.invokeMethod("cancel_notification", client.id);
@@ -754,6 +796,8 @@ class ServerModel with ChangeNotifier {
         if (client.incomingVoiceCall) {
           if (isAndroid) {
             showVoiceCallDialog(client);
+          } else if (isDesktop) {
+            unawaited(syncTrustedCmWindow());
           } else {
             // Has incoming phone call, let's set the window on top.
             Future.delayed(Duration.zero, () {
@@ -796,6 +840,61 @@ enum ClientType {
   terminal,
 }
 
+class NnuOfficialSupportIdentity {
+  const NnuOfficialSupportIdentity(
+    this.displayName,
+    this.introduction,
+    this.badgeColor, {
+    this.accountName = '',
+    this.avatarJpeg = '',
+    this.peerPlatform = '',
+    this.clickPrompt = false,
+    this.fullControlOnAccept = false,
+  });
+
+  final String displayName;
+  final String introduction;
+  final String badgeColor;
+  final String accountName;
+  final String avatarJpeg;
+  final String peerPlatform;
+  final bool clickPrompt;
+  final bool fullControlOnAccept;
+
+  static NnuOfficialSupportIdentity? fromJson(dynamic value) {
+    if (value is! Map<String, dynamic>) return null;
+    final name = value['display_name'];
+    final intro = value['introduction'];
+    if (name is! String || name.isEmpty || intro is! String || intro.isEmpty) {
+      return null;
+    }
+    final color = value['badge_color'];
+    final accountName = value['account_name'];
+    final avatar = value['avatar_jpeg'];
+    return NnuOfficialSupportIdentity(
+      name,
+      intro,
+      color is String ? color : 'blue',
+      accountName: accountName is String ? accountName : '',
+      avatarJpeg: avatar is String && avatar.length <= 3600 ? avatar : '',
+      peerPlatform: value['peer_platform'] is String ? value['peer_platform'] : '',
+      clickPrompt: value['click_prompt'] == true,
+      fullControlOnAccept: value['full_control_on_accept'] == true,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'display_name': displayName,
+        'introduction': introduction,
+        'badge_color': badgeColor,
+        'account_name': accountName,
+        'avatar_jpeg': avatarJpeg,
+        'peer_platform': peerPlatform,
+        'click_prompt': clickPrompt,
+        'full_control_on_accept': fullControlOnAccept,
+      };
+}
+
 class Client {
   int id = 0; // client connections inner count id
   bool authorized = false;
@@ -805,6 +904,7 @@ class Client {
   String portForward = "";
   String name = "";
   String avatar = "";
+  NnuOfficialSupportIdentity? officialSupport;
   String peerId = ""; // peer user's id,show at app
   bool keyboard = false;
   bool clipboard = false;
@@ -818,6 +918,39 @@ class Client {
   bool fromSwitch = false;
   bool inVoiceCall = false;
   bool incomingVoiceCall = false;
+  bool nnuVoiceOnly = false;
+  DateTime? trustedConnectedAt;
+
+  bool get canReverseFileTransfer =>
+      file &&
+      (officialSupport?.peerPlatform.isNotEmpty ?? false) &&
+      officialSupport!.peerPlatform.toLowerCase() != 'ios';
+
+  bool get isTrustedDesktopConnected =>
+      officialSupport != null &&
+      trustedConnectedAt != null &&
+      authorized &&
+      !disconnected &&
+      !fromSwitch &&
+      !nnuVoiceOnly &&
+      !isFileTransfer &&
+      !isViewCamera &&
+      !isTerminal &&
+      portForward.isEmpty;
+
+  bool get isTrustedDesktopRequest =>
+      officialSupport?.clickPrompt == true &&
+      !authorized &&
+      !disconnected &&
+      !fromSwitch &&
+      !nnuVoiceOnly &&
+      !isFileTransfer &&
+      !isViewCamera &&
+      !isTerminal &&
+      portForward.isEmpty;
+
+  bool get canAcceptFullControl =>
+      isTrustedDesktopRequest && officialSupport!.fullControlOnAccept;
 
   RxInt unreadChatMessageCount = 0.obs;
 
@@ -827,6 +960,9 @@ class Client {
   Client.fromJson(Map<String, dynamic> json) {
     id = json['id'];
     authorized = json['authorized'];
+    if (json['nnu_session_connected'] == true || (authorized && json['official_support'] == null)) {
+      trustedConnectedAt = DateTime.now();
+    }
     isFileTransfer = json['is_file_transfer'];
     // TODO: no entry then default.
     isViewCamera = json['is_view_camera'];
@@ -834,6 +970,7 @@ class Client {
     portForward = json['port_forward'];
     name = json['name'];
     avatar = json['avatar'] ?? '';
+    officialSupport = NnuOfficialSupportIdentity.fromJson(json['official_support']);
     peerId = json['peer_id'];
     keyboard = json['keyboard'];
     clipboard = json['clipboard'];
@@ -847,18 +984,23 @@ class Client {
     fromSwitch = json['from_switch'];
     inVoiceCall = json['in_voice_call'];
     incomingVoiceCall = json['incoming_voice_call'];
+    nnuVoiceOnly = json['nnu_voice_only'] == true;
   }
 
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['id'] = id;
     data['authorized'] = authorized;
+    data['nnu_session_connected'] = trustedConnectedAt != null;
     data['is_file_transfer'] = isFileTransfer;
     data['is_view_camera'] = isViewCamera;
     data['is_terminal'] = isTerminal;
     data['port_forward'] = portForward;
     data['name'] = name;
     data['avatar'] = avatar;
+    if (officialSupport != null) {
+      data['official_support'] = officialSupport!.toJson();
+    }
     data['peer_id'] = peerId;
     data['keyboard'] = keyboard;
     data['clipboard'] = clipboard;
