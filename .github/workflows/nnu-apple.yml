@@ -148,6 +148,8 @@ jobs:
         run: |
           unset MACOSX_DEPLOYMENT_TARGET
           export IPHONEOS_DEPLOYMENT_TARGET=15.0
+          # Native objects must match this deployment target and the vcpkg libraries.
+          cargo clean --release --target aarch64-apple-ios -p scrap -p hwcodec -p magnum-opus -p webm-sys -p dart-sys -p kcp-sys -p ring -p zstd-sys
           cargo build --locked --release --target aarch64-apple-ios --features flutter,hwcodec --lib
           cd flutter
           flutter build ios --release --no-codesign
