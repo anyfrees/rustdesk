@@ -59,11 +59,28 @@ def configure_downloads(vcpkg):
     text = path.read_text()
     before = '"${github_host}/${org_name}/${repo_name}/archive/${ref_to_use}.tar.gz"'
     after = '"https://codeload.github.com/${org_name}/${repo_name}/tar.gz/${ref_to_use}"'
-    if after in text:
-        return
-    if text.count(before) != 1:
-        raise ValueError('Pinned vcpkg download template changed')
-    path.write_text(text.replace(before, after))
+    if after not in text:
+        if text.count(before) != 1:
+            raise ValueError('Pinned vcpkg download template changed')
+        path.write_text(text.replace(before, after))
+    path = Path(vcpkg) / 'scripts/cmake/vcpkg_download_distfile.cmake'
+    text = path.read_text()
+    marker = '    # NNU official GitHub archive endpoint\n'
+    if marker not in text:
+        anchor = '    # SILENT_EXIT and QUIET are meaningless'
+        if text.count(anchor) != 1:
+            raise ValueError('Pinned vcpkg distfile template changed')
+        rewrite = marker + '''    set(nnu_archive_urls)
+    foreach(nnu_url IN LISTS arg_URLS)
+        if(nnu_url MATCHES "^https://github[.]com/([^/]+)/([^/]+)/archive/(.+)[.]tar[.]gz$")
+            set(nnu_url "https://codeload.github.com/${CMAKE_MATCH_1}/${CMAKE_MATCH_2}/tar.gz/${CMAKE_MATCH_3}")
+        endif()
+        list(APPEND nnu_archive_urls "${nnu_url}")
+    endforeach()
+    set(arg_URLS "${nnu_archive_urls}")
+
+'''
+        path.write_text(text.replace(anchor, rewrite + anchor))
     print('Using official GitHub codeload archives; vcpkg SHA-512 checks remain enabled')
 
 

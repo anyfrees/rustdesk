@@ -122,7 +122,11 @@ jobs:
             sleep 10
           done
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
-          "$VCPKG_ROOT/vcpkg" install --triplet "$VCPKG_DEFAULT_TRIPLET" --host-triplet "$VCPKG_DEFAULT_HOST_TRIPLET" --x-install-root="$VCPKG_ROOT/installed"
+          for attempt in 1 2 3; do
+            if "$VCPKG_ROOT/vcpkg" install --triplet "$VCPKG_DEFAULT_TRIPLET" --host-triplet "$VCPKG_DEFAULT_HOST_TRIPLET" --x-install-root="$VCPKG_ROOT/installed"; then break; fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            sleep 10
+          done
       - name: Save completed native dependencies
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
