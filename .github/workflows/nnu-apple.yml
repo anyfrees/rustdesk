@@ -49,7 +49,6 @@ jobs:
       VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
       VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.host_triplet }}
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_minimum }}
-      IPHONEOS_DEPLOYMENT_TARGET: '15.0'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -98,6 +97,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           prefix-key: nnu-apple-${{ matrix.target }}
+          cache-on-failure: true
       - name: Restore native dependencies
         id: native-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -147,6 +147,8 @@ jobs:
         shell: bash
         run: |
           cargo build --locked --release --target aarch64-apple-ios --features flutter,hwcodec --lib
+          unset MACOSX_DEPLOYMENT_TARGET
+          export IPHONEOS_DEPLOYMENT_TARGET=15.0
           cd flutter
           flutter build ios --release --no-codesign
           cd ..
