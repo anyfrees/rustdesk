@@ -6,14 +6,14 @@ on:
       platform:
         description: Apple platform to build
         type: choice
-        options: [all, macos, ios]
+        options: [all, macos, macos-arm64, macos-x86_64, ios]
         default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: nnu-apple-${{ github.ref }}
+  group: nnu-apple-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: false
 
 env:
@@ -98,8 +98,9 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           prefix-key: nnu-apple-${{ matrix.target }}
-      - name: Cache native dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      - name: Restore native dependencies
+        id: native-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ${{ runner.temp }}/vcpkg/installed
@@ -114,9 +115,21 @@ jobs:
           git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
           git -C "$VCPKG_ROOT" fetch --depth 1 origin "$VCPKG_COMMIT_ID"
           git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          for attempt in 1 2 3; do
+            if "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics; then break; fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            sleep 10
+          done
           echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
           "$VCPKG_ROOT/vcpkg" install --triplet "$VCPKG_DEFAULT_TRIPLET" --host-triplet "$VCPKG_DEFAULT_HOST_TRIPLET" --x-install-root="$VCPKG_ROOT/installed"
+      - name: Save completed native dependencies
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ${{ runner.temp }}/vcpkg/installed
+            ${{ runner.temp }}/vcpkg/downloads
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Build macOS app
         if: matrix.platform == 'macos'
         shell: bash

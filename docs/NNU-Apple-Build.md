@@ -1,6 +1,6 @@
 # macOS 与 iOS 构建
 
-打开 GitHub 仓库的 **Actions → NNU Apple Build → Run workflow**，选择 `master`，平台选择 `all`、`macos` 或 `ios`。流程由用户手动触发，不依赖 Windows 便携版密码，也不修改线上更新渠道。
+打开 GitHub 仓库的 **Actions → NNU Apple Build → Run workflow**，选择 `master`，平台选择 `all`、`macos` 或 `ios`；也可用 `macos-arm64`、`macos-x86_64` 单独构建一种架构。流程由用户手动触发，不依赖 Windows 便携版密码，也不修改线上更新渠道。
 
 macOS 分别使用 Intel 和 Apple 芯片的原生 runner，生成 DMG 与保留应用结构的 ZIP。Intel 版使用 Flutter 3.24.5；Apple 芯片版沿用上游 Flutter 3.44 适配及 ScreenCaptureKit，最低 macOS 12.3。macOS 包仅作临时签名，未进行 Developer ID 签名或苹果公证。
 

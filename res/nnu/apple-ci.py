@@ -115,9 +115,9 @@ if __name__ == '__main__':
             dict(platform='ios', arch='arm64', os='macos-15', target='aarch64-apple-ios', triplet='arm64-ios', host_triplet='arm64-osx', flutter='3.24.5', macos_minimum='12.3', extra_args=''),
         ]
         choice = os.environ.get('REQUESTED_PLATFORM', 'all')
-        if choice not in ('all', 'macos', 'ios'):
+        if choice not in ('all', 'macos', 'macos-arm64', 'macos-x86_64', 'ios'):
             raise ValueError('Unsupported platform')
-        value = json.dumps(dict(include=[r for r in rows if choice == 'all' or r['platform'] == choice]))
+        value = json.dumps(dict(include=[r for r in rows if choice == 'all' or r['platform'] == choice or r['platform'] + '-' + r['arch'] == choice]))
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write('value=' + value + '\n')
     elif command == 'configure':
