@@ -35,13 +35,17 @@ def configure():
     if os.environ['APPLE_PLATFORM'] == 'ios':
         path = ROOT / 'flutter/ios/Runner.xcodeproj/project.pbxproj'
         text = path.read_text().replace('com.carriez.flutterHbb', 'cn.nnu.rustdesk')
+        text = text.replace('${DT_TOOLCHAIN_DIR}', '${TOOLCHAIN_DIR}')
         text = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', 'DEVELOPMENT_TEAM = "";', text)
         path.write_text(text)
         path = ROOT / 'flutter/ios/Runner/Info.plist'
         data = plistlib.loads(path.read_bytes())
         data['CFBundleDisplayName'] = 'RustDesk VIP支持专业版'
         path.write_bytes(plistlib.dumps(data))
-    elif os.environ['APPLE_ARCH'] == 'arm64':
+    else:
+        path = ROOT / 'flutter/macos/Runner.xcodeproj/project.pbxproj'
+        path.write_text(re.sub(r'DEVELOPMENT_TEAM = [^;]+;', 'DEVELOPMENT_TEAM = "";', path.read_text()))
+    if os.environ['APPLE_PLATFORM'] == 'macos' and os.environ['APPLE_ARCH'] == 'arm64':
         replacements = [
             ('build.py', 'MACOSX_DEPLOYMENT_TARGET=10.14', 'MACOSX_DEPLOYMENT_TARGET=12.3'),
             ('flutter/macos/Podfile', "platform :osx, '10.14'", "platform :osx, '12.3'"),
@@ -139,7 +143,8 @@ def check_native():
     for name in ['libvpx.a', 'libaom.a', 'libyuv.a', 'libopus.a']:
         result = subprocess.run(['xcrun', 'otool', '-l', str(folder / name)],
                                 capture_output=True, text=True, check=True)
-        platforms = set(re.findall(r'^\s*platform\s+(\d+)\s*$', result.stdout, re.M))
+        platforms = set(re.findall(r'^\s*platform\s+(\d+|MACOS|IOS)\s*$', result.stdout, re.M))
+        platforms = {'1' if p == 'MACOS' else '2' if p == 'IOS' else p for p in platforms}
         if 'LC_VERSION_MIN_MACOSX' in result.stdout:
             platforms.add('1')
         if 'LC_VERSION_MIN_IPHONEOS' in result.stdout:

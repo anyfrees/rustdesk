@@ -8,6 +8,8 @@ iOS 构建 ARM64 真机版本，最低 iOS 15，应用标识为 `cn.nnu.rustdesk
 
 成功任务的 Artifacts 中可下载安装包、`BUILD-INFO.json` 与 `SHA256SUMS.txt`，保留 30 天。构建信息记录源码提交、NNU 版本和签名状态。固定使用仓库中的已验证 FFI 桥接文件；Flutter 3.44 任务只重新生成匹配依赖的 Dart 模型。
 
+为控制构建消耗，平台任务串行执行，任一失败即停止剩余任务，每个平台最多运行 60 分钟。Ubuntu 准备任务先执行 Apple 配置测试；Mac runner 在 Rust 编译前检查原生静态库的平台，拒绝混入 iOS/Mac 缓存。依赖缓存按平台、宿主最低版本和 vcpkg 配置隔离，Rust 中打包的原生库重新装入。iOS 的最低版本统一为 15，且不向宿主工具构建导出 iOS 环境变量。
+
 仓库内的 `res/nnu/official-support-public-keys.txt` 仅包含认证公钥。Apple 入口加载自建服务器默认配置，并启用现有认证根与账号历史/收藏同步模块；不会上传私钥、令牌或本机设置。
 
 Apple 相关改动限于新的工作流与打包脚本、`src/lib.rs` 模块条件，以及 `core_main.rs`、`flutter_ffi.rs`、`client.rs`、`ui_interface.rs` 中已有 NNU 入口的 Apple 条件。Windows/Linux/Android 的运行路径保持原有实现。实际 Apple 编译结果应以对应 Actions 任务为准。

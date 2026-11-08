@@ -35,15 +35,18 @@ jobs:
         id: matrix
         env:
           REQUESTED_PLATFORM: ${{ inputs.platform }}
-        run: python3 res/nnu/apple-ci.py matrix
+        run: |
+          python3 -m unittest discover -s res/nnu -p test_apple_ci.py
+          python3 res/nnu/apple-ci.py matrix
 
   build:
     name: ${{ matrix.platform }} / ${{ matrix.arch }}
     needs: prepare
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    timeout-minutes: 60
     strategy:
-      fail-fast: false
+      fail-fast: true
+      max-parallel: 1
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
@@ -105,8 +108,8 @@ jobs:
           path: |
             ${{ runner.temp }}/vcpkg/installed
             ${{ runner.temp }}/vcpkg/downloads
-          key: nnu-apple-vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
-          restore-keys: nnu-apple-vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}-partial-
+          key: nnu-apple-vcpkg-${{ matrix.triplet }}-host${{ matrix.macos_minimum }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+          restore-keys: nnu-apple-vcpkg-${{ matrix.triplet }}-host${{ matrix.macos_minimum }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}-partial-
       - name: Install native dependencies
         shell: bash
         run: |
