@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/desktop/widgets/nnu_voice_sound.dart';
@@ -46,5 +48,3 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   }, skip: !Platform.isWindows);
 }
-import 'dart:io';
-
