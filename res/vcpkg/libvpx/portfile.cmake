@@ -231,6 +231,13 @@ else()
         set(MAKE_BINARY "make")
     endif()
 
+    if(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_IOS)
+        # libvpx's configure/link probes use compiler-driver flags on Darwin.
+        set(ENV{LD} "${VCPKG_DETECTED_CMAKE_CXX_COMPILER}")
+        separate_arguments(OPTIONS NATIVE_COMMAND "${OPTIONS}")
+        separate_arguments(OPTIONS_DEBUG NATIVE_COMMAND "${OPTIONS_DEBUG}")
+    endif()
+
     message(STATUS "Build info. Target: ${LIBVPX_TARGET}; Options: ${OPTIONS}")
 
     if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "release")
