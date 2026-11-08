@@ -54,6 +54,19 @@ def configure():
         path.write_text(re.sub(r'MACOSX_DEPLOYMENT_TARGET = [\d.]+;', 'MACOSX_DEPLOYMENT_TARGET = 12.3;', path.read_text()))
 
 
+def configure_downloads(vcpkg):
+    path = Path(vcpkg) / 'scripts/cmake/vcpkg_from_github.cmake'
+    text = path.read_text()
+    before = '"${github_host}/${org_name}/${repo_name}/archive/${ref_to_use}.tar.gz"'
+    after = '"https://codeload.github.com/${org_name}/${repo_name}/tar.gz/${ref_to_use}"'
+    if after in text:
+        return
+    if text.count(before) != 1:
+        raise ValueError('Pinned vcpkg download template changed')
+    path.write_text(text.replace(before, after))
+    print('Using official GitHub codeload archives; vcpkg SHA-512 checks remain enabled')
+
+
 def package(platform):
     data, native = metadata()
     arch = os.environ['NNU_APPLE_ARCH']
@@ -122,6 +135,8 @@ if __name__ == '__main__':
             output.write('value=' + value + '\n')
     elif command == 'configure':
         configure()
+    elif command == 'downloads':
+        configure_downloads(sys.argv[2])
     elif command == 'package-macos':
         package('macos')
     elif command == 'package-ios':

@@ -115,6 +115,7 @@ jobs:
           git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
           git -C "$VCPKG_ROOT" fetch --depth 1 origin "$VCPKG_COMMIT_ID"
           git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
+          python3 res/nnu/apple-ci.py downloads "$VCPKG_ROOT"
           for attempt in 1 2 3; do
             if "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics; then break; fi
             if [[ "$attempt" == 3 ]]; then exit 1; fi
