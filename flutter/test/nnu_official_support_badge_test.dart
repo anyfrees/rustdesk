@@ -148,7 +148,8 @@ void main() {
         await tester.pumpWidget(
             badge(color, reducedMotion: true, brightness: brightness));
         await tester.pumpAndSettle();
-        expect(find.bySemanticsLabel('通过官方认证'), findsOneWidget);
+        expect(tester.getSemantics(find.byIcon(Icons.verified_outlined)).label,
+            contains('通过官方认证'));
         expect(tester.binding.transientCallbackCount, 0);
         expect(tester.takeException(), isNull);
         final nameColor =

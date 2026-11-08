@@ -44,5 +44,7 @@ void main() {
     expect(played.last, 0);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
-  });
+  }, skip: !Platform.isWindows);
 }
+import 'dart:io';
+
