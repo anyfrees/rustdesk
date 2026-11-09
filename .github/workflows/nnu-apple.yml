@@ -57,6 +57,11 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+      - name: Verify Apple compiler runtime link
+        env:
+          APPLE_PLATFORM: ${{ matrix.platform }}
+          APPLE_ARCH: ${{ matrix.arch }}
+        run: python3 res/nnu/apple-ci.py runtime
       - name: Install build tools
         shell: bash
         run: |
@@ -149,6 +154,7 @@ jobs:
         run: |
           # Rebundle the validated native archives instead of old cached copies.
           cargo clean --release -p scrap -p hwcodec -p magnum-opus
+          touch build.rs
           python3 build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.extra_args }}
           python3 res/nnu/apple-ci.py package-macos
       - name: Build iOS unsigned IPA
@@ -159,6 +165,7 @@ jobs:
           export IPHONEOS_DEPLOYMENT_TARGET=15.0
           # Native objects must match this deployment target and the vcpkg libraries.
           cargo clean --release --target aarch64-apple-ios -p scrap -p hwcodec -p magnum-opus -p webm-sys -p dart-sys -p kcp-sys -p ring -p zstd-sys
+          touch build.rs
           cargo build --locked --release --target aarch64-apple-ios --features flutter,hwcodec --lib
           cd flutter
           flutter build ios --release --no-codesign

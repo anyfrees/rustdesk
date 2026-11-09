@@ -8,6 +8,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -86,6 +87,33 @@ def configure_downloads(vcpkg):
 '''
         path.write_text(text.replace(anchor, rewrite + anchor))
     print('Using official GitHub codeload archives; vcpkg SHA-512 checks remain enabled')
+
+
+def configure_runtime():
+    platform, arch = os.environ['APPLE_PLATFORM'], os.environ['APPLE_ARCH']
+    if platform not in ('macos', 'ios') or arch not in ('x86_64', 'arm64') or (platform == 'ios' and arch != 'arm64'):
+        raise ValueError('Unsupported Apple runtime target')
+    sdk, suffix = ('iphoneos', 'ios') if platform == 'ios' else ('macosx', 'osx')
+    resource = subprocess.check_output(['xcrun', '--sdk', sdk, 'clang', '--print-resource-dir'], text=True).strip()
+    runtime = Path(resource) / 'lib/darwin' / f'libclang_rt.{suffix}.a'
+    if not runtime.is_file():
+        raise ValueError('Apple compiler runtime missing: ' + str(runtime))
+    sysroot = subprocess.check_output(['xcrun', '--sdk', sdk, '--show-sdk-path'], text=True).strip()
+    minimum = '15.0' if platform == 'ios' else os.environ['MACOSX_DEPLOYMENT_TARGET']
+    target = f'{arch}-apple-' + ('ios' if platform == 'ios' else 'macosx') + minimum
+    with tempfile.TemporaryDirectory() as directory:
+        source, executable = Path(directory) / 'availability.c', Path(directory) / 'availability'
+        source.write_text('extern int __isPlatformVersionAtLeast(unsigned, unsigned, unsigned, unsigned);\n'
+                          'int main(void) { return __isPlatformVersionAtLeast(1, 10, 14, 0); }\n')
+        probe_env = dict(os.environ)
+        if platform == 'ios':
+            probe_env.pop('MACOSX_DEPLOYMENT_TARGET', None)
+        subprocess.run(['xcrun', '--sdk', sdk, 'clang', '-target', target, '-isysroot', sysroot,
+                        '-nodefaultlibs', str(source), str(runtime), '-lSystem', '-o', str(executable)],
+                       env=probe_env, check=True)
+    with open(os.environ['GITHUB_ENV'], 'a') as env:
+        env.write('NNU_APPLE_COMPILER_RUNTIME=' + str(runtime) + '\n')
+    print('Verified Apple availability runtime link: ' + target)
 
 
 def package(platform):
@@ -178,6 +206,8 @@ if __name__ == '__main__':
         configure_downloads(sys.argv[2])
     elif command == 'check-native':
         check_native()
+    elif command == 'runtime':
+        configure_runtime()
     elif command == 'package-macos':
         package('macos')
     elif command == 'package-ios':

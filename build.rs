@@ -98,6 +98,16 @@ fn main() {
     #[cfg(windows)]
     build_windows();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if matches!(target_os.as_str(), "macos" | "ios") {
+        println!("cargo:rerun-if-env-changed=NNU_APPLE_COMPILER_RUNTIME");
+        if let Ok(runtime) = std::env::var("NNU_APPLE_COMPILER_RUNTIME") {
+            assert!(
+                std::path::Path::new(&runtime).is_file(),
+                "Apple compiler runtime missing"
+            );
+            println!("cargo:rustc-link-arg={runtime}");
+        }
+    }
     if target_os == "macos" {
         #[cfg(target_os = "macos")]
         build_mac();

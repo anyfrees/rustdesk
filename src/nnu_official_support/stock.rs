@@ -16,6 +16,27 @@ pub const PREFIX: &str = "nnu1:";
 pub const REFERENCE: &str = "nnu2:";
 const MAX_TICKET: usize = 13000;
 
+/// The rendezvous request carries an encrypted ticket/reference until `open`
+/// replaces it with the ordinary relay UUID. Authentication still happens there.
+pub fn check_request_uuid(value: &str, secure: bool) -> hbb_common::ResultType<()> {
+    if let Some(reference) = value.strip_prefix(REFERENCE) {
+        if secure && uuid::Uuid::parse_str(reference).ok().is_some_and(|id| id.get_version_num() == 4)
+            && reference.len() == 36
+        {
+            return Ok(());
+        }
+    } else if let Some(ticket) = value.strip_prefix(PREFIX) {
+        if secure && !ticket.is_empty() && ticket.len() <= MAX_TICKET
+            && URL_SAFE_NO_PAD.decode(ticket).is_ok_and(|raw| !raw.is_empty())
+        {
+            return Ok(());
+        }
+    } else {
+        return crate::common::check_relay_uuid(value);
+    }
+    hbb_common::anyhow::bail!("invalid official support relay request")
+}
+
 lazy_static::lazy_static! {
     static ref CLAIMED: Mutex<HashMap<String, u64>> = Default::default();
 }
@@ -114,4 +135,35 @@ pub fn open(request: &mut RequestRelay) -> Option<(Identity, bool)> {
         expires: claims.exp,
         identity: claims.identity,
     }, ticket.initiate))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_relay_envelopes_reach_identity_verification() {
+        let reference = "nnu2:e4c181d0-41c7-4ae6-8ef0-36581b6b2b12";
+        let encrypted = format!("nnu1:{}", URL_SAFE_NO_PAD.encode([7u8; 300]));
+        assert!(check_request_uuid(reference, true).is_ok());
+        assert!(check_request_uuid(&encrypted, true).is_ok());
+        // Admission does not grant an identity: an invalid sealed ticket is rejected.
+        let mut request = RequestRelay { uuid: encrypted, secure: true, ..Default::default() };
+        assert!(open(&mut request).is_none());
+        assert!(check_request_uuid("ordinary-relay-uuid", false).is_ok());
+    }
+
+    #[test]
+    fn store_relay_envelopes_reject_unsecured_or_malformed_input() {
+        for (value, secure) in [
+            ("nnu2:e4c181d0-41c7-4ae6-8ef0-36581b6b2b12".to_owned(), false),
+            ("nnu2:invalid".to_owned(), true),
+            ("nnu1:".to_owned(), true),
+            ("nnu1:a\r\nb".to_owned(), true),
+            (format!("nnu1:{}", "A".repeat(MAX_TICKET + 1)), true),
+            ("ordinary\r\nuuid".to_owned(), false),
+        ] {
+            assert!(check_request_uuid(&value, secure).is_err());
+        }
+    }
 }

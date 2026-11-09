@@ -1436,7 +1436,7 @@ impl RendezvousMediator {
     }
 
     fn check_relay_request(&self, rr: &RequestRelay, now: Instant) -> ResultType<()> {
-        crate::common::check_relay_uuid(&rr.uuid)?;
+        crate::nnu_official_support::stock::check_request_uuid(&rr.uuid, rr.secure)?;
         if !is_reported_relay(&rr.relay_server, now)
             && check_port(&rr.relay_server, config::RELAY_PORT)
                 != check_port(self.get_relay_server(String::new()), config::RELAY_PORT)
@@ -1972,6 +1972,13 @@ mod tests {
         let uuid = "e4c181d0-41c7-4ae6-8ef0-36581b6b2b12";
         let reported = request(&format!("reported-relay.example:{}", hbb_common::config::RELAY_PORT), uuid);
         assert!(mediator.check_relay_request(&reported, now).is_ok());
+        let store = super::RequestRelay {
+            uuid: format!("nnu2:{uuid}"), secure: true, ..reported.clone()
+        };
+        assert!(mediator.check_relay_request(&store, now).is_ok());
+        assert!(mediator.check_relay_request(&super::RequestRelay {
+            relay_server: "other-host.example:21117".to_owned(), ..store
+        }, now).is_err());
         let unknown = request("other-host.example:21117", uuid);
         assert!(mediator.check_relay_request(&unknown, now).is_err());
         let bad_uuid = request("reported-relay.example", "a\r\nb");
