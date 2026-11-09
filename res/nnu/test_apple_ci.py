@@ -13,6 +13,22 @@ spec.loader.exec_module(ci)
 
 
 class AppleConfigurationTest(unittest.TestCase):
+    def test_bootstrap_uses_fresh_download_url_without_changing_checksum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / 'scripts'
+            (scripts / 'cmake').mkdir(parents=True)
+            bootstrap = 'vcpkgDownloadFile "https://github.com/microsoft/vcpkg-tool/releases/download/$VCPKG_TOOL_RELEASE_TAG/$vcpkgToolName" "$vcpkgRootDir/vcpkg" $vcpkgToolReleaseSha\n'
+            (scripts / 'bootstrap.sh').write_text(bootstrap)
+            (scripts / 'cmake/vcpkg_from_github.cmake').write_text('"${github_host}/${org_name}/${repo_name}/archive/${ref_to_use}.tar.gz"')
+            (scripts / 'cmake/vcpkg_download_distfile.cmake').write_text('    # SILENT_EXIT and QUIET are meaningless')
+            ci.configure_downloads(root)
+            first = (scripts / 'bootstrap.sh').read_text()
+            ci.configure_downloads(root)
+            self.assertEqual(first, (scripts / 'bootstrap.sh').read_text())
+            self.assertIn('?nnu-build=${NNU_VCPKG_DOWNLOAD_NONCE:-0}', first)
+            self.assertTrue(first.endswith('"$vcpkgRootDir/vcpkg" $vcpkgToolReleaseSha\n'))
+
     def test_platform_configuration_keeps_ios_and_macos_separate(self):
         files = ['Cargo.toml', 'build.py', 'res/nnu/official-support-public-keys.txt',
                  'flutter/ios/Runner.xcodeproj/project.pbxproj', 'flutter/ios/Runner/Info.plist',

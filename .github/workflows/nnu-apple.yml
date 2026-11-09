@@ -133,7 +133,7 @@ jobs:
           git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
           python3 res/nnu/apple-ci.py downloads "$VCPKG_ROOT"
           for attempt in 1 2 3; do
-            if "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics; then break; fi
+            if NNU_VCPKG_DOWNLOAD_NONCE="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}-${RANDOM}" "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics; then break; fi
             if [[ "$attempt" == 3 ]]; then exit 1; fi
             sleep 10
           done

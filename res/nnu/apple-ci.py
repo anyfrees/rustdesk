@@ -60,6 +60,14 @@ def configure():
 
 
 def configure_downloads(vcpkg):
+    path = Path(vcpkg) / 'scripts/bootstrap.sh'
+    text = path.read_text()
+    before = '"https://github.com/microsoft/vcpkg-tool/releases/download/$VCPKG_TOOL_RELEASE_TAG/$vcpkgToolName"'
+    after = before[:-1] + '?nnu-build=${NNU_VCPKG_DOWNLOAD_NONCE:-0}"'
+    if after not in text:
+        if text.count(before) != 1:
+            raise ValueError('Pinned vcpkg bootstrap download template changed')
+        path.write_text(text.replace(before, after))
     path = Path(vcpkg) / 'scripts/cmake/vcpkg_from_github.cmake'
     text = path.read_text()
     before = '"${github_host}/${org_name}/${repo_name}/archive/${ref_to_use}.tar.gz"'
