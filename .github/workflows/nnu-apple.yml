@@ -62,6 +62,18 @@ jobs:
           APPLE_PLATFORM: ${{ matrix.platform }}
           APPLE_ARCH: ${{ matrix.arch }}
         run: python3 res/nnu/apple-ci.py runtime
+      - name: Install Rust
+        shell: bash
+        env:
+          APPLE_RUST_TARGET: ${{ matrix.target }}
+        run: |
+          for attempt in 1 2 3; do
+            if rustup toolchain install "$RUST_VERSION" --profile minimal --target "$APPLE_RUST_TARGET"; then break; fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            sleep 10
+          done
+          rustup default "$RUST_VERSION"
+          echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
       - name: Install build tools
         shell: bash
         run: |
@@ -97,11 +109,6 @@ jobs:
       - name: Test Flutter code
         working-directory: flutter
         run: flutter test --concurrency=2 --timeout=120s
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           prefix-key: nnu-apple-${{ matrix.target }}
