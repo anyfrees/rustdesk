@@ -39,11 +39,14 @@ Future<bool> nnuFadeCancelledPasswordDock({required bool reducedMotion,
 
 class NnuPasswordConnectionCard extends StatelessWidget {
   const NnuPasswordConnectionCard({super.key, required this.client,
-    required this.name, required this.onDisconnect, this.exiting = false});
+    required this.name, required this.onDisconnect, this.exiting = false, this.connectionsButton,
+    this.hasOrbit = false});
   final Client client;
   final String name;
   final VoidCallback onDisconnect;
   final bool exiting;
+  final Widget? connectionsButton;
+  final bool hasOrbit;
 
   @override
   Widget build(BuildContext context) {
@@ -60,13 +63,13 @@ class NnuPasswordConnectionCard extends StatelessWidget {
         visible: !exiting, maintainSize: true, maintainState: true, maintainAnimation: true,
         child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Padding(padding: const EdgeInsetsDirectional.only(start: 65),
+          Padding(padding: EdgeInsetsDirectional.only(start: hasOrbit ? 74 : 65),
             child: SizedBox(height: 50, child: identity != null
               ? NnuOfficialSupportNameLine(identity, verifiedLabel: '', nameColor: ink, fontSize: 19)
               : Align(alignment: AlignmentDirectional.centerStart,
                   child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
                     style: nnuOfficialSupportTypography.copyWith(fontSize: 19, color: ink))))),
-          const SizedBox(height: 11),
+          SizedBox(height: hasOrbit ? 23 : 11),
           Expanded(child: SingleChildScrollView(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('ID  ${client.peerId}', maxLines: 1, overflow: TextOverflow.ellipsis,
@@ -87,7 +90,8 @@ class NnuPasswordConnectionCard extends StatelessWidget {
               ],
             ]))),
           const SizedBox(height: 8),
-          OutlinedButton.icon(onPressed: onDisconnect,
+          Row(children: [if (connectionsButton != null) connectionsButton!,
+          Expanded(child: OutlinedButton.icon(onPressed: onDisconnect,
             icon: Icon(pending ? Icons.close_rounded : Icons.link_off_rounded, size: 16),
             label: Text(pending ? '拒绝连接' : '断开连接'),
             style: OutlinedButton.styleFrom(
@@ -97,7 +101,8 @@ class NnuPasswordConnectionCard extends StatelessWidget {
               backgroundColor: dark ? const Color(0xff3d3449) : const Color(0xfffff5f7),
               side: BorderSide(color: muted.withOpacity(.25)),
               textStyle: nnuOfficialSupportTypography.copyWith(fontSize: 13),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)))),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))))),
+          ]),
         ]))),
     ));
   }

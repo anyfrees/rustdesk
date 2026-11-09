@@ -522,6 +522,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
         // File timer for processing read_jobs
         let mut file_timer =
             crate::rustdesk_interval(time::interval_at(Instant::now() + SEC30, SEC30));
+        let mut nnu_input_timer = crate::rustdesk_interval(time::interval(Duration::from_millis(200)));
 
         #[cfg(target_os = "windows")]
         let is_authorized = self.cm.is_authorized(self.conn_id);
@@ -606,6 +607,10 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                 }
                                 Data::ClickTime(ms) => {
                                     CLICK_TIME.store(ms, Ordering::SeqCst);
+                                }
+                                #[cfg(feature = "flutter")]
+                                Data::Config((name, Some(value))) if name == crate::nnu_input_activity::QUERY => {
+                                    crate::nnu_input_activity::publish(&value);
                                 }
                                 Data::ChatMessage { text } => {
                                     self.cm.new_message(self.conn_id, text);
@@ -825,6 +830,16 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                 },
                 Some(job_log) = rx_log.recv() => {
                     self.cm.ui_handler.file_transfer_log("transfer", &job_log);
+                }
+                _ = nnu_input_timer.tick(), if cfg!(all(feature = "flutter",
+                    not(any(target_os = "android", target_os = "ios")))) && self.conn_id > 0 => {
+                    let poll = {
+                        let clients = CLIENTS.read().unwrap();
+                        let active = clients.values().filter(|c| !c.disconnected);
+                        active.clone().count() > 1 && active.map(|c| c.id).min() == Some(self.conn_id)
+                    };
+                    if poll && self.stream.send(&Data::Config((
+                        crate::nnu_input_activity::QUERY.to_owned(), None))).await.is_err() { break; }
                 }
                 _ = file_timer.tick() => {
                     if !self.read_jobs.is_empty() {

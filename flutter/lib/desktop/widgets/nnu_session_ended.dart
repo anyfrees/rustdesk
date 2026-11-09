@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import '../../models/server_model.dart';
@@ -94,7 +95,7 @@ class _NnuSessionEndTransitionState extends State<NnuSessionEndTransition>
     });
 }
 
-class NnuSessionEnded extends StatelessWidget {
+class NnuSessionEnded extends StatefulWidget {
   const NnuSessionEnded({super.key, required this.identity,
     required this.peerId, required this.onClose});
   final NnuOfficialSupportIdentity identity;
@@ -102,7 +103,35 @@ class NnuSessionEnded extends StatelessWidget {
   final VoidCallback onClose;
 
   @override
+  State<NnuSessionEnded> createState() => _NnuSessionEndedState();
+}
+
+class _NnuSessionEndedState extends State<NnuSessionEnded> {
+  Timer? _autoClose;
+
+  @override
+  void initState() {
+    super.initState();
+    _autoClose = Timer(const Duration(seconds: 30), _close);
+  }
+
+  void _close() {
+    if (_autoClose == null) return;
+    _autoClose?.cancel();
+    _autoClose = null;
+    widget.onClose();
+  }
+
+  @override
+  void dispose() {
+    _autoClose?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final identity = widget.identity;
+    final peerId = widget.peerId;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final ink = dark ? const Color(0xffe2efff) : const Color(0xff203e61);
     final muted = dark ? const Color(0xffa9bdd4) : const Color(0xff58758b);
@@ -141,7 +170,7 @@ class NnuSessionEnded extends StatelessWidget {
                     Text('ID  $peerId', maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: muted, fontSize: 12)),
                     const SizedBox(height: 18),
-                    FilledButton(onPressed: onClose, style: FilledButton.styleFrom(
+                    FilledButton(onPressed: _close, style: FilledButton.styleFrom(
                       enabledMouseCursor: SystemMouseCursors.click,
                       backgroundColor: const Color(0xff285fb5), foregroundColor: Colors.white,
                       minimumSize: const Size(0, 40),

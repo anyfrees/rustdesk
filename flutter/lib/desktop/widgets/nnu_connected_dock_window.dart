@@ -69,6 +69,16 @@ Future<void> _syncTrustedShape(int mode) async {
 }
 
 class NnuConnectedDockWindow {
+  int _connectionCount = 1;
+  Future<void> setConnectionCount(int count) async {
+    count = count < 1 ? 1 : count;
+    if (_connectionCount == count) return;
+    _connectionCount = count;
+    if (Platform.isWindows) {
+      await const MethodChannel('org.rustdesk.rustdesk/host')
+          .invokeMethod<void>('setTrustedDockConnections', count);
+    }
+  }
   NnuDockPlacement? _placement;
   NnuDockMessagePlacement? _message;
   bool _expanded = false;

@@ -18,8 +18,29 @@ inline bool NeedsLegacyTransparency() {
          info.dwMinorVersion <= 1;
 }
 
+inline HRGN TrustedOrbitRegion(int x, int y, double scale, int count, bool legacy) {
+  auto pixel = [scale](double v) { return static_cast<int>(std::lround(v * scale)); };
+  const int radius = pixel(legacy ? 23 : 43);
+  HRGN region = CreateEllipticRgn(x - radius, y - radius, x + radius, y + radius);
+  if (!region || !legacy) return region;
+  const double pi = std::acos(-1.0);
+  count = std::max(0, std::min(count, 6));
+  for (int i = 0; i < count; ++i) {
+    const double angle = count == 1 ? -pi * .75 : count == 2
+        ? -pi * .75 + i * pi * 1.5 : -pi / 2 + i * pi * 2 / count;
+    const int cx = x + pixel(std::cos(angle) * 30);
+    const int cy = y + pixel(std::sin(angle) * 30);
+    const int r = pixel(13);
+    HRGN satellite = CreateEllipticRgn(cx - r, cy - r, cx + r, cy + r);
+    if (!satellite) { DeleteObject(region); return nullptr; }
+    CombineRgn(region, region, satellite, RGN_OR);
+    DeleteObject(satellite);
+  }
+  return region;
+}
+
 inline HRGN TrustedContentRegion(int mode, int width, int height, double scale,
-                                 double message_height = 76) {
+                                 double message_height = 76, int orbit_count = 0) {
   auto pixel = [scale](double value) {
     return static_cast<int>(std::lround(value * scale));
   };
@@ -39,8 +60,10 @@ inline HRGN TrustedContentRegion(int mode, int width, int height, double scale,
     HRGN tail = CreatePolygonRgn(points, 3, WINDING);
     const int avatar = left ? width - pixel(43) : pixel(43);
     const int radius = pixel(NeedsLegacyTransparency() ? 26 : 43);
-    HRGN circle = CreateEllipticRgn(avatar - radius, center - radius,
-                                   avatar + radius, center + radius);
+    HRGN circle = orbit_count > 0
+        ? TrustedOrbitRegion(avatar, center, scale, orbit_count, NeedsLegacyTransparency())
+        : CreateEllipticRgn(avatar - radius, center - radius,
+                            avatar + radius, center + radius);
     if (!region || !tail || !circle) {
       if (region) DeleteObject(region);
       if (tail) DeleteObject(tail);
@@ -52,6 +75,10 @@ inline HRGN TrustedContentRegion(int mode, int width, int height, double scale,
     DeleteObject(tail);
     DeleteObject(circle);
     return region;
+  }
+  if (mode == 7) {
+    return TrustedOrbitRegion(width / 2, height / 2, scale,
+                               orbit_count, NeedsLegacyTransparency());
   }
   if (mode == 2) {
     const int radius = std::min({pixel(NeedsLegacyTransparency() ? 26 : 43),
@@ -71,13 +98,19 @@ inline HRGN TrustedContentRegion(int mode, int width, int height, double scale,
 
 class TrustedFrame {
  public:
+  void SetDockConnections(HWND window, int count) {
+    orbit_count_ = std::max(0, std::min(count - 1, 6));
+    if (mode_ == 2 || mode_ == 7) SetMode(window, 2);
+    else Refresh(window);
+  }
   void SetMessage(HWND window, int mode, double height) {
     message_height_ = height;
     SetMode(window, mode);
   }
 
   void SetMode(HWND window, int mode) {
-    if (!NeedsLegacyTransparency() && mode != 2 && mode != 4 && mode != 5 && mode != 6) {
+    if (mode == 2 && orbit_count_ > 0) mode = 7;
+    if (!NeedsLegacyTransparency() && mode != 2 && mode != 4 && mode != 5 && mode != 6 && mode != 7) {
       if (clipped_) SetWindowRgn(window, nullptr, TRUE);
       mode_ = 0;
       clipped_ = false;
@@ -120,7 +153,7 @@ class TrustedFrame {
       }
     }
     HRGN region = TrustedContentRegion(mode_, area.right, area.bottom, scale,
-                                       message_height_);
+                                       message_height_, orbit_count_);
     if (!region) return;
     updating_ = true;
     BOOL composition = FALSE;
@@ -147,6 +180,7 @@ class TrustedFrame {
 
  private:
   int mode_ = 0;
+  int orbit_count_ = 0;
   double message_height_ = 76;
   bool clipped_ = false;
   bool updating_ = false;

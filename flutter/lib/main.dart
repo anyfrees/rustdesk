@@ -329,7 +329,6 @@ bool _isCmReadyToShow = false;
 enum _CmWindowMode { standard, prompt, dock, ended, voice }
 
 _CmWindowMode _cmWindowMode = _CmWindowMode.standard;
-int? _cmDockConnectionId;
 int? _cmVoiceConnectionId;
 final voiceCallArrived = ValueNotifier(false);
 Client? get desktopVoiceCall => nnuDesktopVoiceClient(gFFI.serverModel.clients);
@@ -369,6 +368,7 @@ Future<void> syncTrustedCmWindow() {
   return _queueCmWindowChange(() async {
     final model = gFFI.serverModel;
     final dock = model.desktopConnectionDock;
+    await nnuConnectedDockWindow.setConnectionCount(model.multipleDesktopDocks.length);
     if (dock != null) _cmLastDockClient = dock;
     if (model.hideCm || (dock == null && model.clients.any((client) => !client.disconnected))) {
       _cmLastDockClient = null;
@@ -380,10 +380,8 @@ Future<void> syncTrustedCmWindow() {
             ? _CmWindowMode.dock
             : trustedEndedClient != null
                 ? _CmWindowMode.ended : _CmWindowMode.standard;
-    final dockId = model.desktopConnectionDock?.id;
     final voiceId = desktopVoiceCall?.id;
     if (mode == _cmWindowMode &&
-        (mode != _CmWindowMode.dock || dockId == _cmDockConnectionId) &&
         (mode != _CmWindowMode.voice || voiceId == _cmVoiceConnectionId)) {
       if (mode != _CmWindowMode.standard) {
         if (await windowManager.isMinimized()) await windowManager.restore();
@@ -487,7 +485,6 @@ Future<void> syncTrustedCmWindow() {
       if (model.hideCm || passwordIdle || model.clients.isEmpty || nnuOnlyVoiceChannels(model.clients)) await hideCmWindow();
     }
     _cmWindowMode = mode;
-    _cmDockConnectionId = mode == _CmWindowMode.dock ? dockId : null;
     _cmVoiceConnectionId = mode == _CmWindowMode.voice ? voiceId : null;
   });
 }

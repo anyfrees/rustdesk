@@ -146,6 +146,12 @@ bool FlutterWindow::OnCreate() {
         }
         trusted_frame_.SetMessage(GetHandle(), *mode, *height);
         result->Success();
+      } else if (call.method_name() == "setTrustedDockConnections") {
+        const auto* argument = call.arguments();
+        const auto* count = argument ? std::get_if<int32_t>(argument) : nullptr;
+        if (!count || *count < 1) { result->Error("invalid_argument"); return; }
+        trusted_frame_.SetDockConnections(GetHandle(), *count);
+        result->Success();
       } else if (call.method_name() == "setTrustedWindowShape") {
         const auto* argument = call.arguments();
         const auto* mode = argument ? std::get_if<int32_t>(argument) : nullptr;

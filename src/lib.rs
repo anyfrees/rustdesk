@@ -51,6 +51,7 @@ mod clipboard;
 pub mod core_main;
 mod custom_server;
 mod nnu_connection_window;
+mod nnu_input_activity;
 mod nnu;
 mod nnu_official_support;
 mod nnu_network;

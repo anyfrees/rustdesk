@@ -170,8 +170,13 @@ class _DesktopServerPageState extends State<DesktopServerPage>
                   }
                 });
             return NnuConnectedDock(
-              key: ValueKey(dock.id),
+              key: const ValueKey('desktop-connection-dock'),
               client: dock,
+              clients: serverModel.multipleDesktopDocks,
+              onSelectClient: serverModel.viewDesktopDock,
+              onInteractionHeld: (held) => held
+                  ? serverModel.viewDesktopDock(dock.id)
+                  : serverModel.followDesktopDockActivity(),
               exiting: serverModel.desktopConnectionDock == null,
               changeWindow: (change) => changeTrustedDockWindow(dock.id, change),
               runLocalAction: localAction,

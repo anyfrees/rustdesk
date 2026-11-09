@@ -15,6 +15,8 @@ import '../../models/chat_model.dart';
 import 'nnu_connected_dock_window.dart';
 import 'nnu_dock_message.dart';
 import 'nnu_password_connection.dart';
+import 'nnu_connection_orbit.dart';
+import 'nnu_dock_participants.dart';
 
 class NnuConnectedDock extends StatefulWidget {
   const NnuConnectedDock({
@@ -27,6 +29,9 @@ class NnuConnectedDock extends StatefulWidget {
     this.onOpenFile,
     this.onVoiceCall,
     this.exiting = false,
+    this.clients = const [],
+    this.onSelectClient,
+    this.onInteractionHeld,
   });
 
   final Client client;
@@ -37,6 +42,9 @@ class NnuConnectedDock extends StatefulWidget {
   final VoidCallback onDisconnect;
   final VoidCallback? onOpenFile;
   final VoidCallback? onVoiceCall;
+  final List<Client> clients;
+  final ValueChanged<int>? onSelectClient;
+  final ValueChanged<bool>? onInteractionHeld;
 
   @override
   State<NnuConnectedDock> createState() => _NnuConnectedDockState();
@@ -58,16 +66,28 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
       reverseDuration: const Duration(milliseconds: 160));
   Object? _seenMessage;
   String? _messageText;
+  int? _messageSenderId;
+  final _participantColors = NnuDockParticipantColors();
+  final _messages = NnuDockMessageQueue();
+  bool _showingQueuedMessage = false;
   Timer? _messageExpiry;
   bool _reducedMotion = false;
   bool _expanded = false;
   bool _dragging = false;
   bool _showChat = false;
+  bool _showConnections = false;
   final _chatBlock = false.obs;
   int _transition = 0;
   Future<void>? _move;
   Offset? _grab;
   Timer? _clock;
+
+  Iterable<Client> get _noticeClients =>
+      [widget.client, ...widget.clients].where((c) => c.authorized && !c.disconnected);
+
+  Color _participantColor(Client client) => !client.authorized
+      ? const Color(0xffed6b79)
+      : _participantColors.colorFor(client.id);
 
   @override
   void initState() {
@@ -76,6 +96,10 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
     final model = gFFI.chatModel;
     final messages = model.messages[MessageKey(widget.client.peerId, widget.client.id)]?.chatMessages;
     if (messages != null && messages.isNotEmpty) _seenMessage = messages.first;
+    for (final client in _noticeClients) {
+      final history = model.messages[MessageKey(client.peerId, client.id)]?.chatMessages;
+      if (history != null && history.isNotEmpty) _messages.markSeen(client.id, history.first);
+    }
     model.addListener(_receiveMessage);
   }
 
@@ -89,6 +113,35 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
   @override
   void didUpdateWidget(covariant NnuConnectedDock oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.client.id != widget.client.id) {
+      if (_messageSenderId == null) {
+        _messageExpiry?.cancel();
+        _messageMotion.value = 0;
+        _messageText = null;
+      }
+      final history = gFFI.chatModel.messages[MessageKey(widget.client.peerId, widget.client.id)]?.chatMessages;
+      _seenMessage = history != null && history.isNotEmpty ? history.first : null;
+      _showChat = false;
+      _showConnections = false;
+      if (_messageSenderId == null && nnuConnectedDockWindow.hasMessage && !_expanded && !_dragging) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_hideMessage());
+        });
+      }
+      if (_expanded || _dragging) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onInteractionHeld?.call(true);
+        });
+      }
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.exiting) return;
+      if (_messageSenderId != null && !_noticeClients.any((c) => c.id == _messageSenderId)) {
+        unawaited(_hideMessage());
+      } else {
+        unawaited(_showNextMessage());
+      }
+    });
     if (widget.exiting) {
       ++_transition;
       _open.stop();
@@ -107,6 +160,10 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
 
   @override
   void dispose() {
+    final release = widget.onInteractionHeld;
+    if (_expanded || _dragging) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => release?.call(false));
+    }
     gFFI.chatModel.removeListener(_receiveMessage);
     _messageExpiry?.cancel();
     _messageMotion.dispose();
@@ -125,12 +182,14 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
   Future<void> _setExpanded(bool expanded) async {
     if (widget.exiting || _expanded == expanded || _dragging) return;
     final transition = ++_transition;
+    if (expanded) widget.onInteractionHeld?.call(true);
     _messageExpiry?.cancel();
     _messageMotion.value = 0;
     setState(() {
       _messageText = null;
+      _messageSenderId = null;
       _expanded = expanded;
-      if (!expanded) _showChat = false;
+      if (!expanded) { _showChat = false; _showConnections = false; }
     });
     _syncWave();
     try {
@@ -140,6 +199,7 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
         if (!mounted || transition != _transition) return;
         if (!resized) {
           setState(() => _expanded = false);
+          widget.onInteractionHeld?.call(false);
           _syncWave();
           return;
         }
@@ -161,6 +221,8 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
         if (mounted && transition == _transition) {
           await widget.changeWindow(
               () => nnuConnectedDockWindow.resize(expanded: false));
+          if (mounted && transition == _transition) widget.onInteractionHeld?.call(false);
+          if (mounted && transition == _transition) unawaited(_showNextMessage());
         }
       }
     } on TickerCanceled {
@@ -169,21 +231,55 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
   }
 
   void _receiveMessage() {
-    if (!widget.client.authorized) return;
     final model = gFFI.chatModel;
     final key = model.latestReceivedKey;
+    if (widget.clients.length > 1) {
+      final senders = _noticeClients.where((c) => c.id == key?.connId).toList();
+      if (senders.isEmpty) return;
+      final sender = senders.first;
+      final messages = model.messages[key]?.chatMessages;
+      if (messages == null || messages.isEmpty) return;
+      final message = messages.first;
+      if (message.user.id == model.me.id || (_showChat && sender.id == widget.client.id)) return;
+      if (sender.id == widget.client.id) _seenMessage = message;
+      _messages.add(NnuDockNotice(sender.id, message, message.text));
+      unawaited(_showNextMessage());
+      return;
+    }
+    if (!widget.client.authorized) return;
     if (key?.connId != widget.client.id) return;
     final messages = model.messages[key]?.chatMessages;
     if (messages == null || messages.isEmpty) return;
     final message = messages.first;
     if (identical(message, _seenMessage) || message.user.id == model.me.id) return;
     _seenMessage = message;
+    _messages.markSeen(widget.client.id, message);
     if (!_expanded && !_dragging && _open.value == 0) {
       unawaited(_showMessage(message.text));
     }
   }
 
-  Future<void> _showMessage(String text) async {
+  Future<void> _showNextMessage() async {
+    if (!mounted || widget.exiting || _showingQueuedMessage || _expanded || _dragging ||
+        _open.value != 0 || _messageText != null) return;
+    final clients = _noticeClients.toList();
+    final notice = _messages.take(clients.map((c) => c.id).toSet());
+    if (notice == null) return;
+    final sender = clients.firstWhere((c) => c.id == notice.connectionId);
+    final before = widget.client.id;
+    _showingQueuedMessage = true;
+    try {
+      final shown = await _showMessage('${nnuDockClientName(sender)}：${notice.text}', senderId: sender.id);
+      if (!shown && mounted && !widget.exiting) _messages.retry(notice);
+    } finally {
+      _showingQueuedMessage = false;
+    }
+    if (mounted && before != widget.client.id && _messageText == null) {
+      unawaited(_showNextMessage());
+    }
+  }
+
+  Future<bool> _showMessage(String text, {int? senderId}) async {
     text = text.characters.take(500).toString();
     final size = NnuDockMessageBubble.measure(context, text,
         nnuConnectedDockWindow.messageMaxWidth);
@@ -195,14 +291,15 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
         shown = await nnuConnectedDockWindow.showMessage(size);
       }
     });
-    if (!mounted || transition != _transition || !applied || !shown) return;
-    setState(() => _messageText = text);
+    if (!mounted || transition != _transition || !applied || !shown) return false;
+    setState(() { _messageText = text; _messageSenderId = senderId; });
     if (_reducedMotion) {
       _messageMotion.value = 1;
     } else {
       _messageMotion.forward();
     }
     _messageExpiry = Timer(const Duration(seconds: 7), () => unawaited(_hideMessage()));
+    return true;
   }
 
   Future<void> _hideMessage() async {
@@ -214,18 +311,35 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
         await _messageMotion.reverse().orCancel;
       }
       if (!mounted || transition != _transition || _expanded || _dragging) return;
+      if (_messages.isNotEmpty) {
+        setState(() { _messageText = null; _messageSenderId = null; });
+        await _showNextMessage();
+        if (!mounted || transition != _transition || _messageText != null) return;
+      }
       await widget.changeWindow(() async {
         if (mounted && transition == _transition) {
           await nnuConnectedDockWindow.resize(expanded: false);
         }
       });
-      if (mounted && transition == _transition) setState(() => _messageText = null);
+      if (mounted && transition == _transition) setState(() { _messageText = null; _messageSenderId = null; });
     } on TickerCanceled {
       // A newer message or the user's action owns the window.
     }
   }
 
   void _openMessageChat() {
+    final senderId = _messageSenderId;
+    if (senderId != null && senderId != widget.client.id) {
+      widget.runLocalAction(() {
+        widget.onSelectClient?.call(senderId);
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          if (!mounted || widget.client.id != senderId) return;
+          await _setExpanded(true);
+          if (mounted && _expanded && widget.client.id == senderId) _openChat();
+        });
+      });
+      return;
+    }
     widget.runLocalAction(() async {
       await _setExpanded(true);
       if (mounted && _expanded) _openChat();
@@ -237,10 +351,12 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
       return;
     }
     setState(() => _dragging = true);
+    widget.onInteractionHeld?.call(true);
     ++_transition;
     _messageExpiry?.cancel();
     _messageMotion.value = 0;
     _messageText = null;
+    _messageSenderId = null;
     _syncWave();
   }
 
@@ -265,11 +381,14 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
     if (mounted) {
       setState(() => _dragging = false);
       _syncWave();
+      widget.onInteractionHeld?.call(false);
+      unawaited(_showNextMessage());
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    _participantColors.retain(_noticeClients.map((c) => c.id));
     final identity = widget.client.officialSupport;
     final name = identity == null
         ? (widget.client.name.isEmpty ? widget.client.peerId : widget.client.name)
@@ -319,6 +438,7 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
                         height: nnuConnectedDockWindow.messageBubbleHeight,
                         child: NnuDockMessageBubble(
                           text: _messageText!,
+                          accent: _messageSenderId == null ? null : _participantColors.colorFor(_messageSenderId!),
                           onLeft: nnuConnectedDockWindow.messageOnLeft,
                           animation: CurveTween(curve: Curves.easeOutCubic).animate(_messageMotion),
                           onOpen: _openMessageChat,
@@ -338,7 +458,17 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
                               scale: lerpDouble(.32, 1, progress)!,
                               child: _showChat
                                   ? _chatPane()
-                                  : _card(name, identity),
+                                  : _showConnections
+                                      ? NnuDockConnectionsCard(clients: widget.clients,
+                                          selectedId: widget.client.id, onSelect: _selectClient,
+                                          onBack: () => setState(() => _showConnections = false))
+                                      : widget.clients.length < 2 ? _card(name, identity)
+                                          : TweenAnimationBuilder<double>(key: ValueKey(widget.client.id),
+                                              tween: Tween(begin: .7, end: 1),
+                                              duration: Duration(milliseconds: reduced ? 0 : 160),
+                                              child: _card(name, identity),
+                                              builder: (_, value, child) => Opacity(opacity: value,
+                                                child: Transform.scale(scale: .98 + .02 * value, child: child))),
                             ),
                           ),
                         ),
@@ -351,14 +481,20 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
                         height: 86,
                         child: IgnorePointer(
                           child: TweenAnimationBuilder<Color?>(
-                            tween: ColorTween(end: widget.client.authorized
-                                ? const Color(0xff66e6a0) : const Color(0xffed6b79)),
+                            tween: ColorTween(end: _participantColor(widget.client)),
                             duration: const Duration(milliseconds: 240),
                             builder: (_, color, __) => CustomPaint(
                               painter: _ConnectedWave(_wave, color!))),
                         ),
                       ),
-                    if (!_showChat)
+                    if (!_showChat && !_showConnections && widget.clients.length > 1)
+                      Positioned(left: avatarCenter.dx - 43, top: avatarCenter.dy - 43,
+                        width: 86, height: 86, child: NnuConnectionOrbit(
+                          clients: widget.clients, selectedId: widget.client.id, primary: avatar!,
+                          colorFor: _participantColors.colorFor, wave: _wave,
+                          messageSenderId: _messageSenderId,
+                          onSelect: _selectClient, onShowAll: _showAllConnections)),
+                    if (!_showChat && !_showConnections && widget.clients.length < 2)
                       Positioned(
                         key: const ValueKey('dock-avatar'),
                         left: avatarCenter.dx - avatarSize / 2,
@@ -386,6 +522,26 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
     setState(() => _showChat = true);
     model.requestChatInputFocus();
   }
+
+  void _selectClient(int id) {
+    widget.onSelectClient?.call(id);
+    setState(() { _showConnections = false; _showChat = false; });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_setExpanded(true));
+    });
+  }
+
+  void _showAllConnections() {
+    setState(() => _showConnections = true);
+    unawaited(_setExpanded(true));
+  }
+
+  Widget? _connectionsButton() => widget.clients.length < 2 ? null : IconButton(
+    tooltip: '远程连接 · ${widget.clients.length}',
+    onPressed: _showAllConnections,
+    icon: const Icon(Icons.people_outline_rounded, size: 20),
+    color: Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xffa9bdd4) : const Color(0xff486781));
 
   Widget _chatPane() {
     final content = ChatPage(type: ChatPageType.desktopCM);
@@ -422,8 +578,7 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
   }
 
   Widget _avatar(String name, String jpeg) {
-    final statusColor = widget.client.authorized
-        ? const Color(0xff52d890) : const Color(0xffed6b79);
+    final statusColor = _participantColor(widget.client);
     return Semantics(
       button: true,
       expanded: _expanded,
@@ -471,7 +626,9 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
   Widget _card(String name, NnuOfficialSupportIdentity? identity) {
     if (!widget.client.authorized || identity == null) {
       return NnuPasswordConnectionCard(client: widget.client, name: name,
-        exiting: widget.exiting, onDisconnect: () => widget.runLocalAction(widget.onDisconnect));
+        exiting: widget.exiting, connectionsButton: _connectionsButton(),
+        hasOrbit: widget.clients.length > 1,
+        onDisconnect: () => widget.runLocalAction(widget.onDisconnect));
     }
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
@@ -512,12 +669,12 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Padding(
-                        padding: const EdgeInsetsDirectional.only(start: 65),
+                        padding: EdgeInsetsDirectional.only(start: widget.clients.length > 1 ? 74 : 65),
                         child: SizedBox(height: 50,
                           child: NnuOfficialSupportNameLine(identity,
                             verifiedLabel: verified, nameColor: ink, fontSize: 19)),
                       ),
-                      const SizedBox(height: 11),
+                      SizedBox(height: widget.clients.length > 1 ? 23 : 11),
                       Expanded(
                         child: SingleChildScrollView(
                           child: Column(
@@ -596,7 +753,9 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
                         ),
                       ),
                       const SizedBox(height: 8),
-                      OutlinedButton.icon(
+                      Row(children: [
+                      if (widget.clients.length > 1) _connectionsButton()!,
+                      Expanded(child: OutlinedButton.icon(
                         onPressed: () =>
                             widget.runLocalAction(widget.onDisconnect),
                         icon: const Icon(Icons.link_off, size: 16),
@@ -619,7 +778,8 @@ class _NnuConnectedDockState extends State<NnuConnectedDock>
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                         ),
-                      ),
+                      )),
+                      ]),
                     ],
                   ),
                 ),

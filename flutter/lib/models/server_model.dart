@@ -15,6 +15,7 @@ import '../common/formatter/id_formatter.dart';
 import '../desktop/pages/server_page.dart' as desktop;
 import '../desktop/widgets/tabbar_widget.dart';
 import '../desktop/widgets/nnu_password_connection.dart';
+import '../desktop/widgets/nnu_connection_orbit.dart';
 import '../mobile/pages/server_page.dart';
 import '../mobile/widgets/android_file_transfer_setup.dart';
 import '../utils/android_documents.dart';
@@ -123,8 +124,38 @@ class ServerModel with ChangeNotifier {
   Client? get trustedDesktopRequest => approveMode == 'password'
       ? null
       : _clients.firstWhereOrNull((client) => client.isTrustedDesktopRequest);
-  Client? get desktopConnectionDock => nnuPasswordConnectionDock(_clients,
-      approveMode: approveMode, hidden: hideCm) ?? trustedDesktopDock;
+  int? _dockViewedClient;
+  int? _dockOperatingClient;
+  List<Client> get multipleDesktopDocks => nnuMultipleDockClients(_clients,
+      approveMode: approveMode, hidden: hideCm);
+  Client? get desktopConnectionDock {
+    final multiple = multipleDesktopDocks;
+    if (multiple.isNotEmpty) {
+      return nnuChooseDockClient(multiple, viewed: _dockViewedClient, operating: _dockOperatingClient);
+    }
+    return nnuPasswordConnectionDock(_clients,
+        approveMode: approveMode, hidden: hideCm) ?? trustedDesktopDock;
+  }
+
+  void viewDesktopDock(int id) {
+    if (desktopConnectionDock?.id != id && !multipleDesktopDocks.any((c) => c.id == id)) return;
+    _dockViewedClient = id;
+    notifyListeners();
+  }
+
+  void followDesktopDockActivity() {
+    if (_dockViewedClient == null) return;
+    _dockViewedClient = null;
+    notifyListeners();
+  }
+
+  void desktopInputActivity(int id) {
+    final multiple = multipleDesktopDocks;
+    if (_dockOperatingClient == id ||
+        !multiple.any((c) => c.id == id && c.authorized)) return;
+    _dockOperatingClient = id;
+    if (multiple.length > 1 && !multiple.any((c) => c.id == _dockViewedClient)) notifyListeners();
+  }
 
   Client? get trustedDesktopDock {
     if (hideCm) return null;

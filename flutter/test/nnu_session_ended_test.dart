@@ -51,7 +51,7 @@ void main() {
       await tester.binding.setSurfaceSize(nnuSessionEndedSize);
       await tester.pumpWidget(MaterialApp(home: Scaffold(body: MediaQuery(
         data: MediaQueryData(textScaler: TextScaler.linear(scale), disableAnimations: true),
-        child: NnuSessionEnded(identity: const NnuOfficialSupportIdentity('官方认证', '认证说明', 'black_gold', accountName: 'IT_SERVER'),
+        child: NnuSessionEnded(key: ValueKey(scale), identity: const NnuOfficialSupportIdentity('官方认证', '认证说明', 'black_gold', accountName: 'IT_SERVER'),
           peerId: '1247744734', onClose: () => closes++),
       ))));
       expect(find.text('远程协助已结束'), findsOneWidget);
@@ -84,5 +84,29 @@ void main() {
     expect(closes, 2);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.binding.setSurfaceSize(null);
+  });
+
+  testWidgets('ending window closes once after 30 seconds and cancels on manual close or disposal', (tester) async {
+    var closes = 0;
+    Widget card(int id) => MaterialApp(home: NnuSessionEnded(key: ValueKey(id),
+      identity: const NnuOfficialSupportIdentity('认证', '', 'blue'), peerId: '$id',
+      onClose: () => closes++));
+    await tester.pumpWidget(card(1));
+    await tester.pump(const Duration(milliseconds: 29999));
+    expect(closes, 0);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(closes, 1);
+    await tester.pump(const Duration(seconds: 1));
+    expect(closes, 1);
+    await tester.pumpWidget(card(2));
+    await tester.tap(find.widgetWithText(FilledButton, '关闭'));
+    expect(closes, 2);
+    await tester.pump(const Duration(seconds: 31));
+    expect(closes, 2);
+    await tester.pumpWidget(card(3));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 31));
+    expect(closes, 2);
+    expect(tester.takeException(), isNull);
   });
 }

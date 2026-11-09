@@ -30,12 +30,14 @@ class NnuDockMessageBubble extends StatelessWidget {
       required this.text,
       required this.onLeft,
       required this.animation,
-      required this.onOpen});
+      required this.onOpen,
+      this.accent});
 
   final String text;
   final bool onLeft;
   final Animation<double> animation;
   final VoidCallback onOpen;
+  final Color? accent;
 
   static TextStyle textStyle(BuildContext context) =>
       (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
@@ -61,10 +63,15 @@ class NnuDockMessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final border = accent == null
+        ? (dark ? const Color(0xff527c7c) : const Color(0xffb4dcd7))
+        : Color.lerp(dark ? const Color(0xff304657) : Colors.white, accent, .55)!;
+    final background = accent == null
+        ? (dark ? const Color(0xff213e42) : const Color(0xffedfaf7))
+        : Color.lerp(dark ? const Color(0xff192b3a) : Colors.white, accent, dark ? .16 : .10)!;
     final shape = NnuSpeechBubbleBorder(
         onLeft: onLeft,
-        side: BorderSide(
-            color: dark ? const Color(0xff527c7c) : const Color(0xffb4dcd7)));
+        side: BorderSide(color: border));
     final alignment = onLeft ? Alignment.centerRight : Alignment.centerLeft;
     return FadeTransition(
       opacity: animation,
@@ -76,7 +83,7 @@ class NnuDockMessageBubble extends StatelessWidget {
           liveRegion: true,
           label: text,
           child: Material(
-            color: dark ? const Color(0xff213e42) : const Color(0xffedfaf7),
+            color: background,
             shape: shape,
             clipBehavior: Clip.antiAlias,
             child: InkWell(
@@ -95,7 +102,8 @@ class NnuDockMessageBubble extends StatelessWidget {
                               .floor()
                               .clamp(1, 3),
                           overflow: TextOverflow.ellipsis,
-                          style: textStyle(context)));
+                          style: textStyle(context).copyWith(color: accent == null ? null :
+                              dark ? const Color(0xffe9f1fa) : const Color(0xff203e52))));
                 }),
               ),
             ),

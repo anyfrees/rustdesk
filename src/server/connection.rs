@@ -2554,6 +2554,7 @@ impl Connection {
                 simulate,
                 show_cursor,
             }))
+            .map(|_| crate::nnu_input_activity::record(self.inner.id(), self.authorized, simulate))
             .ok();
     }
 
@@ -2562,6 +2563,7 @@ impl Connection {
     fn input_pointer(&self, msg: PointerDeviceEvent, conn_id: i32) {
         self.tx_input
             .send(MessageInput::Pointer((msg, conn_id)))
+            .map(|_| crate::nnu_input_activity::record(self.inner.id(), self.authorized, true))
             .ok();
     }
 
@@ -2570,7 +2572,8 @@ impl Connection {
     fn input_key(&self, msg: KeyEvent, press: bool) {
         // to-do: if is the legacy mode, and the key is function key "LockScreen".
         // Switch to the primary display.
-        self.tx_input.send(MessageInput::Key((msg, press))).ok();
+        self.tx_input.send(MessageInput::Key((msg, press)))
+            .map(|_| crate::nnu_input_activity::record(self.inner.id(), self.authorized, true)).ok();
     }
 
     // Auto Login: the password and Return the client would otherwise type itself, typed only if a
@@ -6625,6 +6628,10 @@ async fn start_ipc(
                                 let ct = CLICK_TIME.load(Ordering::SeqCst);
                                 let data = ipc::Data::ClickTime(ct);
                                 stream.send(&data).await?;
+                            }
+                            ipc::Data::Config((name, None)) if name == crate::nnu_input_activity::QUERY => {
+                                stream.send(&ipc::Data::Config((name,
+                                    Some(crate::nnu_input_activity::snapshot())))).await?;
                             }
                             // FileBlockFromCM: data is always sent separately via send_raw.
                             // The data field has #[serde(skip)], so it's empty after deserialization.
