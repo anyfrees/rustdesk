@@ -6,6 +6,9 @@ if [ "$1" = configure ]; then
 
 	INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
 	ln -f -s /usr/share/rustdesk/rustdesk /usr/bin/rustdesk
+	if [ -f /usr/share/rustdesk/nnu_desktop_shortcut.py ]; then
+		/usr/bin/python3 /usr/share/rustdesk/nnu_desktop_shortcut.py --all-users || true
+	fi
 
 	if [ "systemd" == "$INITSYS" ]; then
 

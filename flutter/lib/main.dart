@@ -25,6 +25,7 @@ import 'package:flutter_hbb/desktop/widgets/nnu_password_connection.dart';
 import 'package:flutter_hbb/desktop/widgets/nnu_voice_call.dart';
 import 'package:flutter_hbb/desktop/widgets/nnu_direct_voice_call.dart';
 import 'package:flutter_hbb/desktop/widgets/nnu_update_window_state.dart';
+import 'package:flutter_hbb/desktop/widgets/nnu_linux_desktop_shortcut.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -127,6 +128,7 @@ Future<void> main(List<String> args) async {
     runInstallPage();
   } else {
     desktopType = DesktopType.main;
+    if (isLinux) unawaited(ensureNnuLinuxDesktopShortcut());
     await windowManager.ensureInitialized();
     windowManager.setPreventClose(true);
     if (isMacOS) {

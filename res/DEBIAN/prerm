@@ -4,6 +4,9 @@ set -e
 
 case $1 in
     remove|upgrade)
+		if [ "$1" = remove ] && [ -f /usr/share/rustdesk/nnu_desktop_shortcut.py ]; then
+			/usr/bin/python3 /usr/share/rustdesk/nnu_desktop_shortcut.py --all-users --remove-installed || true
+		fi
 		INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
 		rm -f /usr/bin/rustdesk
 		

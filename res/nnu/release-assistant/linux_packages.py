@@ -74,6 +74,8 @@ def package(source, root, output, build, version, minimum_glibc='2.35', minimum_
         if not (bundle / required).is_file():
             raise RuntimeError('Linux bundle incomplete: ' + required)
     bundle_runtime(bundle)
+    shutil.copy2(source / 'res/nnu/linux_desktop_shortcut.py', bundle / 'nnu_desktop_shortcut.py')
+    shutil.copy2(source / 'res/128x128@2x.png', bundle / 'rustdesk.png')
     native = native_version(source)
     deb = source / f'rustdesk-{native}.deb'
     if not deb.exists():
@@ -92,7 +94,7 @@ def package(source, root, output, build, version, minimum_glibc='2.35', minimum_
     metadata = re.sub(r'^Version: .+$', f'Version: {native}+nnu.{build}', control.read_text(), flags=re.M)
     metadata = re.sub(r'^Maintainer: .+$', 'Maintainer: NNU <admin@nnu.cn>', metadata, flags=re.M)
     metadata = re.sub(r'^Homepage: .+$', 'Homepage: https://rd.nnu.cn/', metadata, flags=re.M)
-    metadata = re.sub(r'^Depends: ', f'Depends: libc6 (>= {minimum_glibc}), libstdc++6 (>= {minimum_libstdcpp}), ', metadata, flags=re.M)
+    metadata = re.sub(r'^Depends: ', f'Depends: python3, libc6 (>= {minimum_glibc}), libstdc++6 (>= {minimum_libstdcpp}), ', metadata, flags=re.M)
     metadata = re.sub(r'^Depends: (.*)$', lambda m: 'Depends: ' + ', '.join(
         item.strip() for item in m[1].split(',') if not re.match(r'^\s*(libxdo3|gstreamer1[.]0-pipewire)(?:\s|$)', item)), metadata, flags=re.M)
     metadata = re.sub(r'^Recommends: .+$', 'Recommends: gstreamer1.0-pipewire', metadata, flags=re.M)
@@ -126,7 +128,7 @@ Summary: RustDesk NNU remote desktop
 License: AGPL-3.0
 URL: https://rd.nnu.cn/
 BuildArch: x86_64
-Requires: libgtk-3.so.0()(64bit), libXss.so.1()(64bit), libXrandr.so.2()(64bit), libasound.so.2()(64bit), libpulse.so.0()(64bit)
+Requires: python3, libgtk-3.so.0()(64bit), libXss.so.1()(64bit), libXrandr.so.2()(64bit), libasound.so.2()(64bit), libpulse.so.0()(64bit)
 Conflicts: rustdesk
 Provides: rustdesk = {native}
 %description
@@ -135,6 +137,7 @@ Provides: rustdesk = {native}
 mkdir -p %{{buildroot}}
 cp -a {staging}/usr %{{buildroot}}/
 %post
+/usr/bin/python3 /usr/share/rustdesk/nnu_desktop_shortcut.py --all-users || true
 if [ -d /run/systemd/system ]; then
  cp /usr/share/rustdesk/files/systemd/rustdesk.service /usr/lib/systemd/system/rustdesk.service
  systemctl daemon-reload
@@ -142,6 +145,9 @@ if [ -d /run/systemd/system ]; then
  systemctl start rustdesk.service
 fi
 %preun
+if [ "$1" -eq 0 ]; then
+ /usr/bin/python3 /usr/share/rustdesk/nnu_desktop_shortcut.py --all-users --remove-installed || true
+fi
 if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
  systemctl disable --now rustdesk.service
  rm -f /usr/lib/systemd/system/rustdesk.service
