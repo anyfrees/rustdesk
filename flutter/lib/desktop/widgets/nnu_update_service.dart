@@ -7,8 +7,8 @@ import 'package:cryptography/cryptography.dart'
     show Ed25519, KeyPairType, Signature, SimplePublicKey;
 import 'nnu_external_update.dart';
 
-const nnuClientBuild = 2026110904;
-const nnuClientVersion = "1.5.1 NNU UI21.28";
+const nnuClientBuild = 2026111001;
+const nnuClientVersion = "1.5.1 NNU UI21.29";
 const nnuUpdateBase = 'https://rd.nnu.cn/client-updates/';
 const nnuUpdatePublicKey = '1umorhoB3pej9Cu4Jlvi/n1JHPdLd6XxcdxDSFaWYGQ=';
 

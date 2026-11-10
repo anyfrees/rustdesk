@@ -219,12 +219,9 @@ class Worker:
         self.prepare(); self.export_source()
         output = Path(self.job['output']); build = int(self.job['build']); version = self.job['version']
         if 'linux' in self.job['targets']:
-            env = self.native_deps('x64-linux', 'linux')
-            self.execute(['cargo', 'build', '--locked', '--features', 'flutter,hwcodec,unix-file-copy-paste', '--lib', '--release'],
-                         cwd=self.source, env=env, name='linux-cargo')
-            self.execute(['python3', 'build.py', '--flutter', '--hwcodec', '--unix-file-copy-paste', '--skip-cargo'],
-                         cwd=self.source, env=env, name='flutter-linux')
-            linux_package(self.source, self.root, output / 'Linux', build, version)
+            from linux_compat import build as build_linux
+            build_linux(self.source, self.root, output / 'Linux', build, version, self.flutter, self.rust,
+                        self.root / 'vcpkg', self.job.get('vcpkg_downloads') or self.root / 'vcpkg/downloads')
         if 'android' in self.job['targets']:
             ndk = self.sdk / 'ndk/28.2.13676358'
             for target, triplet, abi, sysroot in ANDROID:

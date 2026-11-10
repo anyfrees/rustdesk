@@ -28,6 +28,13 @@ class NnuDockPlacement {
         physicalArea.bottom / scale,
       );
 
+  static Rect physicalBounds(Rect logicalArea, double scale) => Rect.fromLTRB(
+        logicalArea.left * scale,
+        logicalArea.top * scale,
+        logicalArea.right * scale,
+        logicalArea.bottom * scale,
+      );
+
   static Rect _compact(Rect area, double fraction) {
     final centerY = area.top + area.height * fraction.clamp(0.0, 1.0);
     final top = (centerY - nnuDockCompactSize.height / 2)
@@ -104,17 +111,26 @@ class NnuConnectedDockWindow {
   }
 
   Future<void> enter() async {
-    final current = await windowManager.getBounds();
+    final native = Platform.isWindows ? await window_size.getWindowInfo() : null;
+    final scale = native?.scaleFactor ?? 1.0;
+    final current = native == null
+        ? await windowManager.getBounds()
+        : NnuDockPlacement.logicalWorkArea(native.frame, scale);
     final saved = bind.getLocalFlutterOption(k: _positionKey).split(',');
     final values = saved.map(double.tryParse).toList();
     final hasPosition = values.length == 3 &&
         values.every((value) => value != null && value.isFinite);
     final center =
         hasPosition ? Offset(values[0]!, values[1]!) : current.center;
-    final area = await _workArea(center);
+    final area = await _workArea(center, scale: scale);
     final savedScreen = hasPosition && area.contains(center);
     final placement = NnuDockPlacement(area, savedScreen ? values[2]! : .48);
-    await windowManager.setBounds(placement.compact);
+    await windowManager.setBounds(
+      Platform.isWindows
+          ? NnuDockPlacement.physicalBounds(placement.compact, scale)
+          : placement.compact,
+      ignoreDevicePixelRatio: Platform.isWindows,
+    );
     await _syncTrustedShape(2);
     _placement = placement;
     _message = null;
@@ -213,9 +229,9 @@ class NnuConnectedDockWindow {
     }
   }
 
-  Future<Rect> _workArea(Offset center) async {
+  Future<Rect> _workArea(Offset center, {double? scale}) async {
     final screens = await window_size.getScreenList();
-    final scale = Platform.isWindows ? windowManager.getDevicePixelRatio() : 1.0;
+    scale ??= Platform.isWindows ? windowManager.getDevicePixelRatio() : 1.0;
     Rect? nearest;
     var distance = double.infinity;
     for (final screen in screens) {

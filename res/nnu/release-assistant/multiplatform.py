@@ -71,7 +71,7 @@ class MultiPlatformBuilder(Builder):
             source_helpers = Path(self.settings.source) / 'res/nnu/release-assistant'
             if not (source_helpers / 'cross_worker.py').exists():
                 raise BuildError('当前源码缺少多平台构建组件，请使用助手自带源码或包含这些组件的 NNU 源码。')
-            for name in ('cross_worker.py', 'linux_packages.py', 'android_packages.py', 'android_key_worker.py'):
+            for name in ('cross_worker.py', 'linux_packages.py', 'linux_compat.py', 'android_packages.py', 'android_key_worker.py'):
                 shutil.copy2(source_helpers / name, helper / name)
             shutil.copytree(source_helpers / 'sodium-sys', helper / 'sodium-sys', dirs_exist_ok=True)
             archive = job / '构建源码.zip'

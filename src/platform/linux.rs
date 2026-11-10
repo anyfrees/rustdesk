@@ -36,6 +36,48 @@ use terminfo::{capability as cap, Database};
 use wallpaper;
 
 pub const PA_SAMPLE_RATE: u32 = 48000;
+
+pub fn use_tray_session_bus() {
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+        return;
+    }
+    let uid = unsafe { hbb_common::libc::getuid() };
+    if let Some(address) = tray_session_bus_address(Path::new(&format!("/run/user/{uid}/bus")), uid) {
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", address);
+    }
+}
+
+fn tray_session_bus_address(path: &Path, uid: u32) -> Option<String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.uid() != uid || !metadata.file_type().is_socket() {
+        return None;
+    }
+    Some(format!("unix:path={}", path.display()))
+}
+
+#[cfg(test)]
+mod tray_session_bus_tests {
+    #[test]
+    fn tray_bus_uses_only_an_owned_session_socket() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = std::env::temp_dir().join(format!("nnu-tray-bus-test-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("bus");
+        let uid = unsafe { hbb_common::libc::getuid() };
+        assert!(super::tray_session_bus_address(&path, uid).is_none());
+        assert!(super::tray_session_bus_address(&dir, uid).is_none());
+        let listener = UnixListener::bind(&path).unwrap();
+        assert_eq!(super::tray_session_bus_address(&path, uid), Some(format!("unix:path={}", path.display())));
+        assert!(super::tray_session_bus_address(&path, uid.wrapping_add(1)).is_none());
+        drop(listener);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+}
+
 static mut UNMODIFIED: bool = true;
 
 #[derive(Clone, Debug)]

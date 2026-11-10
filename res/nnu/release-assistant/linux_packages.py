@@ -1,5 +1,6 @@
 """Run in the local Linux build environment, never on the live remote desktop."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -33,13 +34,46 @@ def download(url, path, expected):
     return path
 
 
-def package(source, root, output, build, version):
+RUNTIME_LIBRARIES = (
+    ('libxdo.so.3', 'libxdo3'),
+    ('libayatana-appindicator3.so.1', 'libayatana-appindicator3-1'),
+    ('libayatana-indicator3.so.7', 'libayatana-indicator3-7'),
+    ('libayatana-ido3-0.4.so.0', 'libayatana-ido3-0.4-0'),
+    ('libdbusmenu-gtk3.so.4', 'libdbusmenu-gtk3-4'),
+    ('libdbusmenu-glib.so.4', 'libdbusmenu-glib4'),
+)
+
+
+def bundle_runtime(bundle):
+    licenses = bundle / 'licenses'
+    licenses.mkdir(exist_ok=True)
+    versions = []
+    for name, package in RUNTIME_LIBRARIES:
+        library = Path('/usr/lib/x86_64-linux-gnu') / name
+        copyright = Path('/usr/share/doc') / package / 'copyright'
+        if not library.is_file() or not copyright.is_file():
+            raise RuntimeError('Missing Linux runtime library or license: ' + package)
+        target = bundle / 'lib' / name
+        shutil.copy2(library, target)
+        run(['patchelf', '--set-rpath', '$ORIGIN', target])
+        shutil.copy2(copyright, licenses / (package + '-copyright'))
+        source = subprocess.check_output(['dpkg-query', '-W', '-f=${source:Package} ${source:Version}', package], text=True).strip()
+        versions.append(dict(library=name, source=source, modification='RUNPATH=$ORIGIN'))
+    for name in ('LGPL-2.1', 'LGPL-3', 'GPL-3'):
+        shutil.copy2(Path('/usr/share/common-licenses') / name, licenses / name)
+    (licenses / 'linux-runtime.json').write_text(json.dumps(versions, indent=2))
+    # These libraries are loaded with dlopen, so ELF dependency collectors miss them.
+    run(['patchelf', '--set-rpath', '$ORIGIN', bundle / 'lib/librustdesk.so'])
+
+
+def package(source, root, output, build, version, minimum_glibc='2.35', minimum_libstdcpp='11'):
     source, root, output = Path(source), Path(root), Path(output)
     output.mkdir(parents=True, exist_ok=True)
     bundle = source / 'flutter/build/linux/x64/release/bundle'
     for required in ('rustdesk', 'lib/librustdesk.so', 'lib/libflutter_linux_gtk.so', 'data/flutter_assets/AssetManifest.bin'):
         if not (bundle / required).is_file():
             raise RuntimeError('Linux bundle incomplete: ' + required)
+    bundle_runtime(bundle)
     native = native_version(source)
     deb = source / f'rustdesk-{native}.deb'
     if not deb.exists():
@@ -53,11 +87,15 @@ def package(source, root, output, build, version):
         shutil.rmtree(staging)
     staging.mkdir(exist_ok=True)
     run(['dpkg-deb', '--raw-extract', deb, staging])
+    run(['cp', '-a', str(bundle) + '/.', staging / 'usr/share/rustdesk'])
     control = staging / 'DEBIAN/control'
     metadata = re.sub(r'^Version: .+$', f'Version: {native}+nnu.{build}', control.read_text(), flags=re.M)
     metadata = re.sub(r'^Maintainer: .+$', 'Maintainer: NNU <admin@nnu.cn>', metadata, flags=re.M)
     metadata = re.sub(r'^Homepage: .+$', 'Homepage: https://rd.nnu.cn/', metadata, flags=re.M)
-    metadata = re.sub(r'^Depends: ', 'Depends: libc6 (>= 2.35), libstdc++6 (>= 11), ', metadata, flags=re.M)
+    metadata = re.sub(r'^Depends: ', f'Depends: libc6 (>= {minimum_glibc}), libstdc++6 (>= {minimum_libstdcpp}), ', metadata, flags=re.M)
+    metadata = re.sub(r'^Depends: (.*)$', lambda m: 'Depends: ' + ', '.join(
+        item.strip() for item in m[1].split(',') if not re.match(r'^\s*(libxdo3|gstreamer1[.]0-pipewire)(?:\s|$)', item)), metadata, flags=re.M)
+    metadata = re.sub(r'^Recommends: .+$', 'Recommends: gstreamer1.0-pipewire', metadata, flags=re.M)
     control.write_text(metadata)
     launcher = staging / 'usr/bin/rustdesk'
     if launcher.is_symlink() and os.readlink(launcher) == '/usr/share/rustdesk/rustdesk':
@@ -74,14 +112,17 @@ def package(source, root, output, build, version):
         (rpmroot / directory).mkdir(parents=True, exist_ok=True)
     spec = rpmroot / 'SPECS/nnu.spec'
     # Use the Flutter bundle from the DEB, including its plugins, assets and native core.
-    spec.write_text(f'''Name: rustdesk-nnu
+    private_abi = '^(' + '|'.join(path.name.replace('.', '[.]') for path in sorted((bundle / 'lib').glob('*.so*'))) + ').*$'
+    spec.write_text(f'''%global __provides_exclude {private_abi}
+%global __requires_exclude {private_abi}
+Name: rustdesk-nnu
 Version: {native}
 Release: {build}
 Summary: RustDesk NNU remote desktop
 License: AGPL-3.0
 URL: https://rd.nnu.cn/
 BuildArch: x86_64
-Requires: gtk3, libXdo, libXScrnSaver, libXtst, libXfixes, libXrandr, alsa-lib, pulseaudio-libs
+Requires: libgtk-3.so.0()(64bit), libXss.so.1()(64bit), libXrandr.so.2()(64bit), libasound.so.2()(64bit), libpulse.so.0()(64bit)
 Conflicts: rustdesk
 Provides: rustdesk = {native}
 %description
@@ -117,7 +158,7 @@ fi
         if appdir.resolve().parent != root.resolve(): raise RuntimeError('Unsafe AppImage staging directory')
         shutil.rmtree(appdir)
     (appdir / 'usr/bin').mkdir(parents=True, exist_ok=True)
-    shutil.copytree(bundle, appdir / 'usr/bin', dirs_exist_ok=True)
+    run(['cp', '-a', str(bundle) + '/.', appdir / 'usr/bin'])
     desktop = appdir / 'rustdesk.desktop'
     desktop.write_text((source / 'res/rustdesk.desktop').read_text().replace('Name=RustDesk\n', 'Name=RustDesk VIP支持专业版\n'))
     shutil.copy2(source / 'res/128x128@2x.png', appdir / 'rustdesk.png')
@@ -128,7 +169,7 @@ fi
     env = dict(os.environ, ARCH='x86_64', OUTPUT=str(output / (prefix + '.AppImage')), APPIMAGE_EXTRACT_AND_RUN='1')
     arguments = [tool, '--appdir', appdir, '--executable', appdir / 'usr/bin/rustdesk', '--desktop-file', desktop,
                  '--icon-file', appdir / 'rustdesk.png']
-    for library in sorted((appdir / 'usr/bin/lib').glob('*.so')):
+    for library in sorted((appdir / 'usr/bin/lib').glob('*.so*')):
         arguments.extend(['--library', library])
     run(arguments + ['--output', 'appimage'], cwd=root, env=env)
     print('Linux DEB, RPM, AppImage and tar.gz packaged', flush=True)

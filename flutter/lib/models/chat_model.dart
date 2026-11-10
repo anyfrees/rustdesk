@@ -279,8 +279,11 @@ class ChatModel with ChangeNotifier {
   }
 
   showChatPage(MessageKey key) async {
-    if (desktopType == DesktopType.cm &&
-        parent.target?.serverModel.trustedDesktopDock?.id == key.connId) return;
+    if (desktopType == DesktopType.cm) {
+      final server = parent.target?.serverModel;
+      if (server?.desktopConnectionDock?.id == key.connId ||
+          server?.multipleDesktopDocks.any((client) => client.id == key.connId) == true) return;
+    }
     if (isDesktop) {
       if (isConnManager) {
         if (!_isShowCMSidePage) {
