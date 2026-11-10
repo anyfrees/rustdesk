@@ -78,7 +78,10 @@ def build(source, workspace, output, build_number, version, flutter, rust, vcpkg
         shutil.copy2(config, helper / 'job.json')
         execute(['unshare', '--mount', '--propagation', 'private', sys.executable, __file__, '--namespace', config],
                 base / 'build.log')
-        shutil.copytree(work / 'output', output, dirs_exist_ok=True)
+        Path(output).mkdir(parents=True, exist_ok=True)
+        for suffix in ('deb', 'rpm', 'AppImage', 'tar.gz'):
+            name = 'RustDesk-NNU-{}-linux-x86_64.{}'.format(build_number, suffix)
+            shutil.copy2(work / 'output' / name, Path(output) / name)
         for name in ('src/version.rs', 'Cargo.lock'):
             copy_changed(work / 'source' / name, Path(source) / name)
         shutil.copy2(work / 'linux-abi-verification.json', Path(output).parent / 'linux-abi-verification.json')
