@@ -97,6 +97,10 @@ def package(source, root, output, build, version, minimum_glibc='2.35', minimum_
         item.strip() for item in m[1].split(',') if not re.match(r'^\s*(libxdo3|gstreamer1[.]0-pipewire)(?:\s|$)', item)), metadata, flags=re.M)
     metadata = re.sub(r'^Recommends: .+$', 'Recommends: gstreamer1.0-pipewire', metadata, flags=re.M)
     control.write_text(metadata)
+    for name in ('preinst', 'postinst', 'prerm', 'postrm'):
+        script = staging / 'DEBIAN' / name
+        if script.is_file():
+            script.write_bytes(script.read_bytes().replace(b'\r\n', b'\n'))
     launcher = staging / 'usr/bin/rustdesk'
     if launcher.is_symlink() and os.readlink(launcher) == '/usr/share/rustdesk/rustdesk':
         launcher.unlink()
